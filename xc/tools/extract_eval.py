@@ -32,7 +32,11 @@ def _remove_overlap(score_mat, docs, lbs):
 
 
 def main(targets_label_file, train_label_file, result_dir, predictions_file,
+<<<<<<< HEAD
          A, B, docs, lbls, mode="m2", alpha=0.5):
+=======
+         A, B, docs, lbls, mode="m2", alpha=0.5, beta=0.5):
+>>>>>>> 3eaca4507add62c93b571f51e90e0178d44a73fb
     true_labels = _remove_overlap(
         data_utils.read_sparse_file(
             targets_label_file, force_header=True).tolil(),
