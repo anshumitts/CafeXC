@@ -1,0 +1,131 @@
+from .custom_transformer import Projection
+from xc.libs.dataparallel import DataParallel
+import torch.nn as nn
+import torch
+
+
+class Base(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.device = torch.device("cuda:0")
+
+    def to(self, element=None):
+        if not torch.is_tensor(element):
+            super().to(self.device)
+            return self
+        else:
+            return element.to(self.device)
+
+    def setup_data_parallel(self, devices, device_type, clean=True):
+        for modules in self.children():
+            if isinstance(modules, DataParallel):
+                modules.setup(devices, device_type)
+                modules.callback(clean)
+
+    def callback(self, clean=False):
+        for modules in self.children():
+            if isinstance(modules, DataParallel):
+                modules.callback(clean)
+
+    def freeze_params(self):
+        pass
+
+    @property
+    def mm_encoder(self):
+        return self.item_encoder
+
+    def save_encoder(self):
+        if isinstance(self.mm_encoder, DataParallel):
+            module = self.mm_encoder.module.eval()
+        else:
+            module = self.mm_encoder.eval()
+        module.merge_embds = None
+        return module.state_dict()
+
+    def init_encoder(self, path):
+        print("init encoder")
+        enc = torch.load(path)
+        try:
+            if isinstance(self.mm_encoder, DataParallel):
+                return self.mm_encoder.module.load_state_dict(enc)
+            else:
+                return self.mm_encoder.load_state_dict(enc)
+        except RuntimeError as e:
+            print("Ignoring missing keys!!!")
+            if isinstance(self.mm_encoder, DataParallel):
+                return self.mm_encoder.module.load_state_dict(enc, strict=False)
+            else:
+                return self.mm_encoder.load_state_dict(enc, strict=False)
+
+
+class BottleNeck(nn.Module):
+    def __init__(self, model_dim, compare_with_dim):
+        super().__init__()
+        self.features = []
+        self.model_dim = model_dim
+        if compare_with_dim != model_dim or compare_with_dim == -1:
+            if model_dim > compare_with_dim:
+                self.features.append(nn.AdaptiveMaxPool1d(compare_with_dim))
+            elif model_dim < compare_with_dim:
+                self.features.append(Projection(model_dim, compare_with_dim))
+            self.model_dim = compare_with_dim
+            self.features.append(Projection(self.fts, None, residual=True))
+        self.features = nn.Sequential(*self.features)
+
+    @property
+    def fts(self):
+        return self.model_dim
+
+    def forward(self, input):
+        return self.features(input)
+
+
+class EncoderBase(Base):
+    def __init__(self, model, project_dim):
+        super().__init__()
+        self.features = model
+        self.project_dim = project_dim
+        self.bottle_neck = BottleNeck(self.fts, self.compare_with_dim)
+
+    @property
+    def compare_with_dim(self):
+        return self.project_dim
+
+    @property
+    def fts(self):
+        return self.project_dim
+
+    def freeze_params(self):
+        if not isinstance(self.features, nn.Linear):
+            for params in self.features.parameters():
+                params.requires_grad = False
+
+    def encode(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def remove_encoder(self):
+        self.features = Projection(self.fts, self.fts)
+
+    def set_for_multi_gpu(self):
+        return nn.DataParallel(self)
+
+
+class Identity(EncoderBase):
+    def __init__(self, params):
+        self.ranker_project = params.ranker_project_dim
+        super(Identity, self).__init__(nn.Identity(), params.ranker_project_dim)
+        self.features = Projection(params.project_dim, None, residual=True)
+
+    def forward(self, vect, mask=None):
+        if mask is None:
+            mask = torch.ones((vect.size(0), 1),
+                              device=vect.device)
+        if len(vect.size()) == 2:
+            vect = vect.unsqueeze(1)
+        return self.bottle_neck(self.features(vect)), mask
+
+    def set_pretrained(self):
+        return self
