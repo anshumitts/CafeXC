@@ -64,7 +64,6 @@ class BottleNeck(nn.Module):
             elif model_dim < compare_with_dim:
                 self.features = Projection(model_dim, compare_with_dim)
             self.model_dim = compare_with_dim
-        self.features = nn.Sequential(*self.features)
 
     @property
     def fts(self):
