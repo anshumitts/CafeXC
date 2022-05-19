@@ -1,7 +1,6 @@
 from transformers import (get_linear_schedule_with_warmup,
                           get_cosine_schedule_with_warmup)
-from torch.optim import SparseAdam
-from transformers import AdamW
+from torch.optim import SparseAdam, AdamW
 from copy import deepcopy
 import torch.nn as nn
 import numpy as np

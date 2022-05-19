@@ -4,6 +4,7 @@ import numpy as np
 import scipy.sparse as sp
 from xc.libs.dtypes import StrVector, Any, Union
 from torch.nn.parallel._functions import Scatter
+from functools import partial
 
 
 def padded_inputs(smat, index_pad_value=0, mask_pad_value=0, return_bool=True):
@@ -69,8 +70,7 @@ def scatter(inputs: Any, split_on_device: Union[int, StrVector],
     if isinstance(split_on_device, int):
         action = "split"
         num_splits = split_on_device
-
-    elif isinstance(split_on_device, list):
+    else:
         action = "scatter"
         num_splits = len(split_on_device)
     if debug:

@@ -88,6 +88,8 @@ class RAWDataset(TXTDataset):
         with open(os.path.join(root, f"{n_file}"), "r", encoding="latin1") as f:
             self.data = list(map(lambda x: x.strip().split("->", 1)[1], f))
         self.data = list(map(lambda x: x.replace("_", " ").lower(), self.data))
+        self.tokenizer = None
+        self.max_len = None
         self._type = "txt"
 
     def __len__(self):
@@ -107,17 +109,25 @@ class RAWDataset(TXTDataset):
         return data
 
     def get_fts(self, idx, _desc):
-        return self[idx]
+        data = self[idx]
+        index, mask = tokens(data, self.tokenizer, self.max_len)
+        index = torch.from_numpy(index).type(torch.LongTensor)
+        mask = torch.from_numpy(mask).type(torch.LongTensor)
+        max_seq = mask.sum(dim=1).max()
+        index, mask = index[:, :max_seq], mask[:, :max_seq]
+        return MultiViewData(BatchData({"mask": mask, "index": index}))
 
     def build_pre_trained(self, txt_model, data_dir, file_name,
                           params, prefix="txt.seq.memmap"):
+        self.max_len = params.max_len
+        self.tokenizer = setup_tokenizer(txt_model)
+        return self
         file_name = f"{file_name}.{prefix}"
         cached_path = os.path.join(data_dir, txt_model)
         print(f"{cached_path}/{file_name}")
         if len(glob.glob(f"{cached_path}/{file_name}*")) > 0:
             return load_txt(cached_path, file_name)
-        _tokenizer = setup_tokenizer(txt_model)
-        input_idx, attention = tokens(self.data, _tokenizer, params.max_len)
+        input_idx, attention = tokens(self.data, self.tokenizer, self.max_len)
         _tokens = np.stack([input_idx, attention], axis=1)
         os.makedirs(cached_path, exist_ok=True)
         save(f"{cached_path}/{file_name}", "memmap", _tokens)
