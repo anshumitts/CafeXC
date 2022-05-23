@@ -1,80 +1,110 @@
-import torch
-import torch.nn as nn
 import numpy as np
-from torch._utils import (
-    _get_all_device_indices,
-    _get_available_device_type,
-    _get_device_index,
-)
-from torch.nn.parallel import (replicate, parallel_apply, gather)
-from .custom_dtypes import DataParallelList, scatter
+import torch
+from torch._utils import (_get_available_device_type,
+                          _get_device_index,
+                          _get_all_device_indices)
+from .custom_dtypes import DataParallelList
+from .dataparallel import scatter_kwargs
 
 
-class DistributedTraining(nn.Module):
+
+
+class GroupDataParallel(torch.nn.DataParallel):
     def __init__(self, module, num_process):
-        super().__init__()
-        device_type = _get_available_device_type()
-        self.module = module
-        self.num_process = num_process
-        if device_type is None:
-            self.module = module
-            self.bDevIDX = None
-            return
-        device_ids = _get_all_device_indices()
-        assert len(device_ids) % num_process == 0, "NUM DEVICES % BUCKECTS !=0"
-        output_device = device_ids[0]
-        self.device_ids = [_get_device_index(x, True) for x in device_ids]
-        self.output_device = _get_device_index(output_device, True)
-        self.src_device_obj = torch.device(device_type, self.device_ids[0])
-        self.device_type = device_type
-        self.module.setup_data_parallel(self.device_ids, self.device_type)
+        super(torch.nn.DataParallel, self).__init__()
+        self.device_ids = None
 
-        if len(self.device_ids) == 1 or num_process == 1:
-            self.module.to(self.src_device_obj)
-            self.bDevIDX = None
-            return
-
-        self.device_ids = np.array_split(self.device_ids, num_process)
-        self.bDevIDX = [device[0] for device in self.device_ids]
+    def train(self, mode=True):
         self._replicas = None
+        return super().train(mode)
 
-    def setup_id_dp(self, replicas):
-        for rep_id, replica in enumerate(replicas):
-            devices = self.device_ids[rep_id]
-            replica.setup_data_parallel(devices, self.device_type, False)
+    def forward(self, *inputs, **kwargs):
+        inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)
+        if not inputs and not kwargs:
+            inputs, kwargs = ((),), ({},)
+        outputs = self.parallel_apply(self._replicas, inputs, kwargs)
+        return self.gather(outputs, self.output_device)
+
+    def scatter(self, inputs, kwargs, device_ids):
+       return scatter_kwargs(inputs, kwargs, device_ids) 
+
+    def setup_data_parallel(self, device_ids, device="cuda", clean=False):
+        self.device_ids = device_ids[1]
+        self._replicas = device_ids[0]
+        self.output_device = self.src_device_obj
+        if not clean:
+            self.callback()
+    
+    def to(self, element=torch.device("cuda:0")):
+        super().to(element)
+        return self
+
+
+def parameters(m, recurse=True):
+    print("in")
+    def model_parameters(m):
+        ps = m._former_parameters.values() \
+            if hasattr(m, "_former_parameters") \
+            else m.parameters(recurse=False)
+        for p in ps:
+            yield p
+
+    for m in m.modules() if recurse else [m]:
+        for p in model_parameters(m):
+            yield p
+
+
+class DistributedTraining(torch.nn.DataParallel):
+    def __init__(self, module, num_process):
+        super(torch.nn.DataParallel, self).__init__()
+        self.dim = 0
+        self.module = module
+        self.device_type = _get_available_device_type()
+        device_ids = _get_all_device_indices()
+        g_cl = len(device_ids)//num_process
+        d_device_ids = [device_ids[x*g_cl: (x+1)*g_cl]
+                        for x in range(num_process)]
+        assert num_process==len(device_ids), "num_process should be eq. to num_cuda_devices or 1"
+        # if num_process != len(device_ids):
+            # device_ids = [_get_device_index(device_ids[x*num_process], True)
+            #               for x in range(len(device_ids)//num_process)]
+        self.device_ids = device_ids
+        self.d_device_ids = d_device_ids
+        self.output_device = _get_device_index(device_ids[0], True)
+
+
+    def train(self, mode=True):
+        self.callback(clean=True)
+        return super().train(mode)
+
+    def setup_data_parallel(self, replicas):
+        for rep_id in range(len(replicas)):
+            devices = self.d_device_ids[rep_id]
+            replicas[rep_id].parameters = parameters
+            replicas[rep_id].setup_data_parallel(
+                devices, self.device_type, False)
         return replicas
 
     def callback(self, clean=False, num_rep=np.inf):
         self._replicas = None
-        if not clean and self.bDevIDX:
-            num_rep = min(num_rep, len(self.bDevIDX))
-            self._replicas = replicate(self.module, self.bDevIDX[:num_rep],
-                                       not torch.is_grad_enabled())
-            self._replicas = self.setup_id_dp(self._replicas)
-        else:
-            self.module.callback(clean)
+        if not clean and self.device_ids is not None:
+            num_rep = min(num_rep, len(self.device_ids))
+            self._replicas = self.replicate(
+                self.module, self.device_ids[:num_rep])
+            self._replicas = self.setup_data_parallel(self._replicas)
+            
+    def forward(self, *inputs, **kwargs):
 
-    def forward(self, input, **kwargs):
-
-        if (not self.bDevIDX) or (not isinstance(input, DataParallelList)):
-            return self.module(input, **kwargs)
-        else:
-            num_rep = len(input)
-            if num_rep == 1:
-                return self.module(input[0], **kwargs)
-            gpus = self.bDevIDX[:num_rep]
-            if self._replicas is None:
-                self.callback(num_rep=num_rep)
-            inputs = input.parallel_to(gpus)
-            kwargs = scatter(kwargs, gpus)
-            if len(inputs) < len(kwargs):
-                inputs.extend(() for _ in range(len(kwargs) - len(inputs)))
-            elif len(kwargs) < len(inputs):
-                kwargs.extend({} for _ in range(len(inputs) - len(kwargs)))
-            inputs = tuple(inputs)
-            kwargs = tuple(kwargs)
-            output = parallel_apply(self._replicas, inputs, kwargs, gpus)
-        return gather(output, self.output_device)
+        if (not self.device_ids) or (not isinstance(inputs[0], DataParallelList)):
+            return self.module(*inputs, **kwargs)
+        inputs = inputs[0]
+        num_rep = len(inputs)
+        gpus = self.device_ids[:num_rep]
+        if self._replicas is None:
+            self.callback(num_rep=num_rep)
+        inputs, kwargs = self.scatter(inputs, kwargs, gpus)
+        output = self.parallel_apply(self._replicas[:num_rep], inputs, kwargs)
+        return self.gather(output, self.output_device)
 
     def __getattr__(self, item):
         try:
@@ -82,9 +112,9 @@ class DistributedTraining(nn.Module):
         except AttributeError:
             return getattr(self.module, item)
 
-    def to(self, element=None):
-        if not torch.is_tensor(element):
-            super().to(self.output_device)
-            return self
-        else:
-            return element.to(self.output_device)
+    def scatter(self, inputs, kwargs, device_ids):
+        return scatter_kwargs(inputs, kwargs, device_ids)
+
+    def to(self, element=torch.device("cuda:0")):
+        super().to(element)
+        return self

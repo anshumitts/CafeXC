@@ -62,8 +62,9 @@ class MufinModelBase(ModelBase):
         content = FeaturesAccumulator(f"{desc} content")
         if len(tst_dset) == 0:
             return content
+        bz = int(self.params.batch_size*self.params.bucket)
         tst_dl = super().dataloader(tst_dset, mode, DocumentCollate,
-                                    batch_size=self.params.batch_size,
+                                    batch_size=bz,
                                     num_workers=self.params.num_workers)
         self.net.eval()
         torch.cuda.empty_cache()
@@ -78,8 +79,9 @@ class MufinModelBase(ModelBase):
         return content
 
     def extract_modal(self, tst_dset):
+        bz = int(self.params.batch_size*self.params.bucket)
         tst_dl = super().dataloader(tst_dset, "test", DocumentCollate,
-                                    batch_size=self.params.batch_size,
+                                    batch_size=bz,
                                     num_workers=self.params.num_workers)
         _type = "memmap" if os.environ['RESTRICTMEM'] == '1' else "npy"
         img_content = FeaturesAccumulator("Image", _type)
@@ -176,8 +178,9 @@ class Mufin(MufinModelBase):
     def get_embs(self, dset):
         lbls = self.extract_item(dset.L, "lbls", "test")
         lbls = lbls.mean_pooled.cpu().numpy()
-        docs = self.extract_item(dset.X, "docs", "test")
-        docs = docs.mean_pooled.cpu().numpy()
+        # docs = self.extract_item(dset.X, "docs", "test")
+        # docs = docs.mean_pooled.cpu().numpy()
+        docs = None
         return docs, lbls
 
     def callback(self, trn_dset):

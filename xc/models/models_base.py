@@ -7,20 +7,15 @@ import torch
 class Base(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.device = torch.device("cuda:0")
 
-    def to(self, element=None):
-        if not torch.is_tensor(element):
-            super().to(self.device)
-            return self
-        else:
-            return element.to(self.device)
+    def to(self, element=torch.device("cuda:0")):
+        super().to(element)
+        return self
 
     def setup_data_parallel(self, devices, device_type, clean=True):
         for modules in self.children():
             if isinstance(modules, DataParallel):
-                modules.setup(devices, device_type)
-                modules.callback(clean)
+                modules.setup_data_parallel(devices, device_type, clean)
 
     def callback(self, clean=False):
         for modules in self.children():
@@ -108,7 +103,8 @@ class EncoderBase(Base):
 class Identity(EncoderBase):
     def __init__(self, params):
         self.ranker_project = params.ranker_project_dim
-        super(Identity, self).__init__(nn.Identity(), params.ranker_project_dim)
+        super(Identity, self).__init__(
+            nn.Identity(), params.ranker_project_dim)
         self.features = Projection(params.project_dim, None, residual=True)
 
     def forward(self, vect, mask=None):
@@ -121,6 +117,6 @@ class Identity(EncoderBase):
 
     def set_pretrained(self):
         return self
-    
+
     def freeze_params(self, *args, **kwargs):
         pass

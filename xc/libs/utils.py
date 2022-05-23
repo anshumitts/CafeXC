@@ -17,9 +17,9 @@ import os
 import re
 
 
-def xc_set_ddp(net, optimizer, bucket):
-    if bucket > 1:
-        net = ddp(net, bucket)
+def xc_set_ddp(net, optimizer, num_process):
+    if num_process > 1:
+        net = ddp(net, num_process)
     return net, optimizer
 
 
@@ -27,6 +27,17 @@ def xc_unset_ddp(net):
     if isinstance(net, ddp):
         return net.module
     return net
+
+
+def fasterTxtRead(file, chunk=100000, encoding="latin1"):
+    with open(file, "r", encoding=encoding) as file:
+        data = []
+        while True:
+            lines = file.readlines(chunk)
+            if not lines:
+                break
+            data.extend(lines)
+    return data
 
 
 @nb.njit(cache=True)

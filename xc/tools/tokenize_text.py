@@ -1,5 +1,5 @@
 import os
-os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 import tempfile
 import argparse
 import numpy as np
@@ -13,8 +13,7 @@ from transformers import (AutoTokenizer, CLIPTokenizer)
 
 def tokens(text, _tokenizer, max_len):
     text = _tokenizer(text, truncation=True, padding=True,
-                      max_length=max_len,
-                      add_special_tokens=True,)
+                      max_length=max_len, add_special_tokens=True)
     input_idx = np.asarray(text.input_ids, dtype=np.int32)
     attention = np.asarray(text.attention_mask, dtype=np.int32)
     return input_idx, attention

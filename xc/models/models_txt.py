@@ -41,11 +41,8 @@ class TxtEncoderBase(EncoderBase):
         vect, mask = self.encode(index, mask)
         return self.bottle_neck(vect), mask
 
-    # def freeze_params(self):
-    #     pass
-
     def extra_repr(self):
-        return f"apply_pooler={self.apply_pooling}"
+        return f"apply_pooler={self.apply_pooling}, device={next(self.parameters()).device}"
 
 
 class BertTiny(TxtEncoderBase):

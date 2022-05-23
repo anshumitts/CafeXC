@@ -1,10 +1,10 @@
 from .custom_dtypes import MultiViewData, BatchData, padded_inputs
 from xc.tools.tokenize_text import setup_tokenizer, tokens
 from sklearn.preprocessing import normalize
+from .utils import load_file, fasterTxtRead
 from xc.libs.custom_dtypes import save
 from .data_base import NullDataset
 from copy import copy, deepcopy
-from .utils import load_file
 import scipy.sparse as sp
 import numpy as np
 import torch
@@ -85,9 +85,8 @@ class TXTDataset(NullDataset):
 
 class RAWDataset(TXTDataset):
     def __init__(self, root, n_file):
-        with open(os.path.join(root, f"{n_file}"), "r", encoding="latin1") as f:
-            self.data = list(map(lambda x: x.strip().split("->", 1)[1], f))
-        self.data = list(map(lambda x: x.replace("_", " ").lower(), self.data))
+        self.data = fasterTxtRead(os.path.join(root, f"{n_file}"))
+        self.data = list(map(lambda x: x.strip().replace("_", " "), self.data))
         self.tokenizer = None
         self.max_len = None
         self._type = "txt"
@@ -106,22 +105,24 @@ class RAWDataset(TXTDataset):
 
     def __getitem__(self, idx):
         data = list(map(lambda x: self.data[x], idx))
-        return data
+        return data    
 
     def get_fts(self, idx, _desc):
         data = self[idx]
         index, mask = tokens(data, self.tokenizer, self.max_len)
+        max_seq = mask.sum(axis=1).max()
+        index, mask = index[:, :max_seq], mask[:, :max_seq]
         index = torch.from_numpy(index).type(torch.LongTensor)
         mask = torch.from_numpy(mask).type(torch.LongTensor)
-        max_seq = mask.sum(dim=1).max()
-        index, mask = index[:, :max_seq], mask[:, :max_seq]
         return MultiViewData(BatchData({"mask": mask, "index": index}))
 
     def build_pre_trained(self, txt_model, data_dir, file_name,
-                          params, prefix="txt.seq.memmap"):
+                          params, prefix="txt.seq.memmap", thresh=5e6):
         self.max_len = params.max_len
         self.tokenizer = setup_tokenizer(txt_model)
         return self
+        if len(self.data) > thresh:
+            return self
         file_name = f"{file_name}.{prefix}"
         cached_path = os.path.join(data_dir, txt_model)
         print(f"{cached_path}/{file_name}")
@@ -131,7 +132,7 @@ class RAWDataset(TXTDataset):
         _tokens = np.stack([input_idx, attention], axis=1)
         os.makedirs(cached_path, exist_ok=True)
         save(f"{cached_path}/{file_name}", "memmap", _tokens)
-        del _tokens, _tokenizer
+        del _tokens
         return load_txt(cached_path, file_name)
 
 

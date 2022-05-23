@@ -11,7 +11,6 @@ class LBLDataset(torch.utils.data.Dataset):
         if isinstance(n_file, str):
             if n_file.endswith("eye"):
                 self.data = sp.eye(int(n_file.split(".")[0])).tocsr()
-                print(self.data.shape)
             else:
                 self.data = load_file(os.path.join(root, f"{n_file}"))
         elif sp.issparse(n_file):

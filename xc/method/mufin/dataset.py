@@ -102,8 +102,8 @@ class SiameseData(Dataset):
         self.hard_pos = params.hard_pos
         if self.hard_pos:
             self.pos_scoring = self.gt_rows
-            # self.pos_scoring = ScoreEdges(self.gt_rows, lbl_xf, doc_xf,
-            #                               params.batch_size)
+            self.pos_scoring = ScoreEdges(self.gt_rows, lbl_xf, doc_xf,
+                                          params.batch_size)
         lbl_xf = lbl_xf[self.valid_lbls]
         self.order = cluster(lbl_xf, params.min_leaf_sz,
                              params.min_splits, force_gpu=True)

@@ -76,9 +76,10 @@ class ANNSBox(object):
         self.lbls_ncc = np.array([])
         self.lbls_emb = np.array([])
 
-    def fit(self, docs_emb, lbls_emb, y_mat):
-        self.lbls_ncc = y_mat.T.dot(docs_emb)
-        self.docs = docs_emb
+    def fit(self, docs_emb=None, lbls_emb=None, y_mat=None):
+        if docs_emb is not None:
+            self.lbls_ncc = y_mat.T.dot(docs_emb)
+            self.docs = docs_emb
         self.lbls_emb = lbls_emb
 
     def fit_anns(self, vect, smat, clusters=True):

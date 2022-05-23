@@ -1,4 +1,4 @@
-from .custom_dtypes import DataParallelList as DP
+from .custom_dtypes import DataParallelList
 import numpy as np
 import torch
 
@@ -37,10 +37,10 @@ class XCDistributedDataLoader(object):
         for batch in self.dataloader:
             buffer.append(batch)
             if len(buffer) % self.num_process == 0:
-                yield DP(buffer)
+                yield DataParallelList(buffer)
                 buffer = []
         if len(buffer) > 0:
-            yield DP(buffer)
+            yield DataParallelList(buffer)
 
     def __len__(self):
         return int(np.ceil(len(self.dataloader)/self.num_process))
