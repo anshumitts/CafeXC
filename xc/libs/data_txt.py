@@ -87,6 +87,8 @@ class RAWDataset(TXTDataset):
     def __init__(self, root, n_file):
         self.data = fasterTxtRead(os.path.join(root, f"{n_file}"))
         self.data = list(map(lambda x: x.strip().replace("_", " "), self.data))
+        if len(self.data[0].split('->', 1)) == 2:
+            self.data = list(map(lambda x: x.split('->', 1)[1], self.data))    
         self.tokenizer = None
         self.max_len = None
         self._type = "txt"
