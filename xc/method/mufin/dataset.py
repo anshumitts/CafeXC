@@ -147,45 +147,6 @@ class CrossAttention(Dataset):
 
     def setup(self):
         self.order = np.arange(len(self)).reshape(-1, 1)
-        if self.mode == "train":
-            self.setup_proba(self.module2)
-
-    def setup_proba(self, shorty, batch_size=1024):
-        self.pos, self.neg = self.clean_shortlist(shorty, self.gt, batch_size)
-
-    def clean_shortlist(self, shorty, gt, batch_size=1024):
-        pos_sh, neg_sh = [], []
-        indexes = np.arange(0, shorty.shape[0], batch_size)
-        for start in pbar(indexes, desc="Cleaning"):
-            end = min(start+batch_size, shorty.shape[0])
-            _sh = shorty[start:end].tolil()
-            _gt = gt[start:end].tolil()
-            gt_rows, gt_cols = _gt.nonzero()
-            pos = sp.lil_matrix(_sh.shape)
-            pos[gt_rows, gt_cols] = np.ravel(_sh[gt_rows, gt_cols].todense())
-            _sh[gt_rows, gt_cols] = 0
-            neg = _sh.tocsr()
-            pos = pos.tocsr()
-            _hard_neg = xs.retain_topk(neg, k=1)
-            _hard_neg.data[_hard_neg.data[:] < 0.95] = 0
-            neg = neg - _hard_neg
-            pos.eliminate_zeros()
-            neg.eliminate_zeros()
-            pos.data[:] = 1.01 - pos.data[:]
-            neg.data[:] = 1.01 + neg.data[:]
-            p_rows, p_cols = pos.nonzero()
-            _gt[p_rows, p_cols] = 0
-            _gt_min = pos.min(axis=0)/1.5
-            pos = pos + _gt.multiply(_gt_min)
-            pos_sh.append(pos)
-            neg_sh.append(neg)
-
-            del _gt, _hard_neg, _sh
-        pos = normalize(sp.vstack(pos_sh, "csr"), "l1").tocsr()
-        neg = normalize(sp.vstack(neg_sh, "csr"), "l1").tocsr()
-        print(f"#shorty: {shorty.nnz}")
-        print(f"\t #pos:{pos.nnz} + #neg:{neg.nnz} = {pos.nnz+neg.nnz}")
-        return pos, neg
 
     @property
     def module2(self):
@@ -197,7 +158,22 @@ class CrossAttention(Dataset):
 
     def get_samples(self, doc_idx):
         if self.mode == "train":
-            return self.pos[doc_idx], self.neg[doc_idx], self.Y.get_fts(doc_idx)
+            _sh = self.module2[doc_idx]
+            _gt = self.gt[doc_idx]
+            pos = _gt.multiply(_sh)
+            neg = _sh - pos
+            _hard_neg = xs.retain_topk(neg, k=1)
+            _hard_neg.data[_hard_neg.data[:] < 0.95] = 0
+            neg = neg - _hard_neg
+            pos.eliminate_zeros()
+            neg.eliminate_zeros()
+            pos.data[:] = 1.01 - pos.data[:]
+            neg.data[:] = 1.01 + neg.data[:]
+            p_rows, p_cols = pos.nonzero()
+            _gt[p_rows, p_cols] = 0
+            _gt_min = pos.min(axis=0)/1.5
+            pos = pos + _gt.multiply(_gt_min)
+            return pos, neg, self.gt[doc_idx]
         return None
 
     def __getitem__(self, didx):

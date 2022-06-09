@@ -47,8 +47,7 @@ def map_neighbors(indices, similarity, top_k, pad_ind, pad_val):
 
 def query_anns(anns, vect, num_lbls, top_k=100, b_size=256, lbl_hash=None, desc="anns"):
     s_lbls, s_scrs = [], []
-    for start in pbar(np.arange(0, len(vect), b_size),
-                      desc=desc, write_final=True):
+    for start in np.arange(0, len(vect), b_size):
         end = min(start+b_size, len(vect))
         lbls, distance = anns.query(vect[start:end])
         s_lbls.append(lbls)
@@ -56,21 +55,24 @@ def query_anns(anns, vect, num_lbls, top_k=100, b_size=256, lbl_hash=None, desc=
     s_lbls, s_scrs = np.vstack(s_lbls).astype(np.int64), np.vstack(s_scrs)
     s_lbls, s_scrs = map_neighbors(s_lbls, s_scrs, top_k, num_lbls, -1)
     if lbl_hash is not None:
+        lbl_hash = np.concatenate((lbl_hash, [num_lbls]))
         s_lbls = lbl_hash[s_lbls]
     smat = xs.csr_from_arrays(s_lbls, s_scrs, (len(vect), num_lbls+1))
     return smat[:, :-1]
 
 
 class ANNSBox(object):
-    def __init__(self, top_k:int=100, num_labels:int=-1, M:int=100,
-                 use_hnsw:bool=False, num_splits:int=1, method:str="hnsw"):
+    def __init__(self, top_k: int = 100, num_labels: int = -1, M: int = 500,
+                 use_hnsw: bool = False, num_splits: int = 1, method: str = "hnsw"):
         self.num_labels = num_labels
         self.top_k = top_k
         self.use_hnsw = use_hnsw
         self.num_splits = num_splits
         self.hnsw, self.mapd = {}, {}
         for i in range(self.num_splits):
-            self.hnsw[f"part_{i}"] = shorty(method=method, M=M)
+            self.hnsw[f"part_{i}"] = shorty(method=method,
+                                            num_neighbours=top_k,
+                                            M=M)
             self.mapd[f"part_{i}"] = []
         self.docs = np.array([])
         self.lbls_ncc = np.array([])
@@ -88,7 +90,8 @@ class ANNSBox(object):
             id_lbl = np.arange(n_lbls)
             if clusters:
                 print("Clustering labels for ANNS")
-                id_lbl = cluster(smat.T.dot(vect), num_clusters=self.num_splits)
+                id_lbl = cluster(smat.T.dot(
+                    vect), num_clusters=self.num_splits)
             else:
                 if self.num_splits > 1:
                     np.random.shuffle(id_lbl)
@@ -124,33 +127,19 @@ class ANNSBox(object):
     def brute_query(self, docs, batch_size):
         if self.use_hnsw:
             return self.hnsw_query(docs, batch_size)
-        data = {}
-        data["emb"] = self._exact_search(docs, self.lbls_emb, self.num_labels,
-                                         batch_size, self.top_k, "brute_emb")
-        data["ncc"] = self._exact_search(docs, self.lbls_ncc, self.num_labels,
-                                         batch_size, self.top_k, "brute_ncc")
-        data["knn+ncc"] = data["emb"].maximum(data["ncc"])
-        return data
+        return self._exact_search(docs, self.lbls_emb, self.num_labels,
+                                  batch_size, self.top_k, "brute_emb")
 
     def _exact_search(self, docs, lbls, num_lbls,
                       batch_size=512, topk=5, desc="desc"):
-        _lbls = torch.from_numpy(lbls).type(torch.FloatTensor)
-        _lbls = F.normalize(_lbls, dim=-1).cuda().T
+        lbls = torch.from_numpy(lbls).type(torch.FloatTensor)
+        lbls = F.normalize(lbls, dim=-1).cuda().T
         docs = torch.from_numpy(docs).type(torch.FloatTensor)
-        docs = F.normalize(docs, dim=-1)
-        scr, ind = [], []
-        idx = np.arange(0, len(docs), batch_size)
-        for start in tqdm.tqdm(idx, desc=desc):
-            end = min(start + batch_size, len(docs))
-            _docs = docs[start:end].cuda()
-            score, index = torch.topk(_docs.mm(_lbls), dim=1, k=topk)
-            scr.append(score.cpu().numpy())
-            ind.append(index.cpu().numpy())
-            del _docs
-        scr, ind = np.vstack(scr), np.vstack(ind)
-        score_mat = xs.csr_from_arrays(ind, scr, (len(docs), num_lbls))
-        del _lbls
-        return score_mat.tocsr()
+        docs = F.normalize(docs, dim=-1).cuda()
+        scr, ind = torch.topk(docs.mm(lbls), dim=1, k=topk)
+        del lbls
+        return xs.csr_from_arrays(ind.cpu().numpy(), scr.cpu().numpy(),
+                                  (docs.shape[0], num_lbls))
 
     def gpu_ova(self, x, y, batch_size=512):
         return self._exact_search(x, y, self.num_labels,
@@ -172,6 +161,9 @@ class ANNSBox(object):
             for key in self.hnsw.keys():
                 path = os.path.join(model_dir, f"{key}/anns_m1")
                 self.hnsw[key].load(path)
+                self.hnsw[key].index._set_query_time_params(efS=self.top_k)
+                self.hnsw[key].index.num_neighbours = self.top_k
+
             path = os.path.join(model_dir, f"anns_m1_map.pkl")
             with open(path, "rb") as f:
                 self.mapd = pickle.load(f)

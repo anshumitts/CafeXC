@@ -1,8 +1,6 @@
 # Example to evaluate
 import xclib.evaluation.xc_metrics as xc_metrics
-import xclib.data.data_utils as data_utils
-from scipy.sparse import load_npz
-import scipy.sparse as sparse
+from xc.libs.utils import load_file
 import numpy as np
 import json
 import sys
@@ -32,18 +30,15 @@ def _remove_overlap(score_mat, docs, lbs):
 
 
 def main(targets_label_file, train_label_file, result_dir, predictions_file, A, B, docs, lbls, mode="m2"):
-    true_labels = _remove_overlap(
-        data_utils.read_sparse_file(
-            targets_label_file, force_header=True).tolil(),
-        docs, lbls)
-    trn_labels = data_utils.read_sparse_file(
-        train_label_file, force_header=True)
+    true_labels = _remove_overlap(load_file(targets_label_file).tolil(),
+                                  docs, lbls)
+    trn_labels =load_file(train_label_file)
     inv_propen = xc_metrics.compute_inv_propesity(trn_labels, A=A, B=B)
     acc = xc_metrics.Metrics(
         true_labels, inv_psp=inv_propen, remove_invalid=False)
     if mode == "m2":
         score_mat_dir = os.path.join(result_dir, f"{predictions_file}.npz")
-        scr_mat = _remove_overlap(load_npz(score_mat_dir).tolil(), docs, lbls)
+        scr_mat = _remove_overlap(load_file(score_mat_dir).tolil(), docs, lbls)
         rec = xc_metrics.recall(scr_mat, true_labels, k=10)[-1]*100
         print("R@10=%0.2f" % (rec))
         args = acc.eval(scr_mat, 5)
@@ -51,12 +46,12 @@ def main(targets_label_file, train_label_file, result_dir, predictions_file, A, 
     if mode == "m4":
         m2_score_mat_dir = os.path.join(
             result_dir, f"module4/m2_{predictions_file}.npz")
-        m2 = _remove_overlap(load_npz(m2_score_mat_dir).tolil(), docs, lbls)
+        m2 = _remove_overlap(load_file(m2_score_mat_dir).tolil(), docs, lbls)
 
         m4_score_mat_dir = os.path.join(
             result_dir, f"module4/m4_{predictions_file}.npz")
-        m4 = _remove_overlap(load_npz(m4_score_mat_dir).tolil(), docs, lbls)
-        
+        m4 = _remove_overlap(load_file(m4_score_mat_dir).tolil(), docs, lbls)
+
         for alpha in [0.1, 0.3, 0.5, 0.7, 0.9]:
             scr_mat = m4.copy().multiply(alpha)
             scr_mat = scr_mat + m2.copy().multiply(1-alpha)

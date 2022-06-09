@@ -59,7 +59,7 @@ def save(fname: str, save_type: str, arr: any) -> None:
         np.save(fname+".npy", arr)
 
     if save_type == "sparse":
-        sp.save_npz(fname+".npz", arr)
+        sp.save_npz(fname+".npz", arr, compressed=False)
 
 
 def scatter(inputs: Any, split_on_device: Union[int, StrVector],

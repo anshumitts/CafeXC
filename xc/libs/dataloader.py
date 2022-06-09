@@ -53,6 +53,7 @@ class XCDistributedDataLoader(object):
 def DataLoader(data, batch_size=256, drop_last=False, params=None,
                shuffle=False, num_workers=2, pin_memory=False,
                collate_fn=None, prefetch_factor=2, num_process=1):
+    num_process = 1 #NOTE Ignoring the ddp command
     _collate_fn = collate_fn(data, params=params)
     _collate_fn.num_process = num_process
     dl = XCDataLoader(data, batch_size=batch_size, num_workers=num_workers,

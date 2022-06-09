@@ -12,11 +12,6 @@ class Base(torch.nn.Module):
         super().to(element)
         return self
 
-    def setup_data_parallel(self, devices, device_type, clean=True):
-        for modules in self.children():
-            if isinstance(modules, DataParallel):
-                modules.setup_data_parallel(devices, device_type, clean)
-
     def callback(self, clean=False):
         for modules in self.children():
             if isinstance(modules, DataParallel):
@@ -38,7 +33,6 @@ class Base(torch.nn.Module):
         return module.state_dict()
 
     def init_encoder(self, path):
-        print("init encoder")
         enc = torch.load(path)
         try:
             return self.mm_encoder.load_state_dict(enc)

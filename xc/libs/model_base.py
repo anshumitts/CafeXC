@@ -74,7 +74,7 @@ class ModelBase:
                 s_g_time = time.time()
                 output = self.net(batch)
                 gpu_time += (time.time() - s_g_time)/deno
-                loss = output.sum()
+                loss = output.mean()
                 _loss += loss.item()/deno
             self.scaler.scale(loss).backward()
             if iter_batch % self.accumulate == 0 or \

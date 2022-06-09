@@ -112,19 +112,16 @@ class XAttn(CLFEmbeddings):
         return (xml_vect*crx_vect).sum(dim=-1)
 
     def preset_weights(self, lbl_vect):
-        if self.padd:
-            padd = torch.zeros((1, lbl_vect.size(1)),
-                               device=lbl_vect.device)
-            lbl_vect = torch.cat([lbl_vect, padd])
         weights = self.activation(self.weights.weight)
-        xml_wts, lbl_wts = torch.chunk(weights, 2, dim=-1)
         xml_vect = self.features.weight
+        if self.padd:
+            weights = weights[:-1]
+            xml_vect = xml_vect[:-1]
+        xml_wts, lbl_wts = torch.chunk(weights, 2, dim=-1)
         xml_vect = self.norm(xml_vect, dim=-1)*xml_wts
         lbl_vect = self.norm(lbl_vect, dim=-1)*lbl_wts
         self.__preset__ = self.norm(xml_vect + lbl_vect, dim=-1)
         self.__preset__ = self.__preset__.detach()
-        if self.sparse:
-            return self.__preset__[:-1]
         return self.__preset__
 
 

@@ -32,7 +32,9 @@ class MufinMultiModal(Base):
     def encode(self, batch, pool=True, output_attn_wts=False):
         return self.item_encoder(batch, pool=pool, output_attn_wts=output_attn_wts)
 
-    def forward(self, batch):
+    def forward(self, batch, encode=False):
+        if encode:
+            return self.encode(batch)
         vect, _ = self.encode(batch['lbls'])
         lbls = normalize(vect.squeeze(1))
         vect, _ = self.encode(batch['docs'])
@@ -69,6 +71,7 @@ class MufinRanker(Base):
             self.item_encoder.remove_encoders(True, False)
         if "PreTrained" in params.model_fname:
             self.item_encoder.set_pretrained()
+        self.params = params
         self.set_for_multi_gpu()
 
     @property
@@ -89,11 +92,16 @@ class MufinRanker(Base):
             return score, clf_docs, attn_wts
         return score
 
-    def forward(self, batch, overwrite=False, cached=False):
+    def forward(self, batch, encode=False, overwrite=False, cached=False):
+        if encode:
+            return self.encode(batch)
         if cached:
             return self.predict(batch)
+        torch.cuda.synchronize()
         output, _ = self.item_encoder(batch["content"], overwrite=overwrite)
+        torch.cuda.synchronize()
         if self.training:
+            torch.cuda.synchronize()
             return self.criterian(output, batch["Y"], mask=batch["mask"])
         return output
 
@@ -111,6 +119,7 @@ class MufinRanker(Base):
 """
 Ranker for MUFIN
 """
+
 
 class MufinXAttnRanker(MufinRanker):
     def __init__(self, params):

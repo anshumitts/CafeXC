@@ -1,6 +1,5 @@
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 from torch.hub import load_state_dict_from_url
-from xc.libs.distributedDP import DistributedTraining as ddp
 from torchvision.models.detection import FasterRCNN
 from torchvision.ops import boxes as box_ops
 from sklearn.preprocessing import normalize
@@ -18,14 +17,12 @@ import re
 
 
 def xc_set_ddp(net, optimizer, num_process):
-    if num_process > 1:
-        net = ddp(net, num_process)
+    #TODO Add DDP support
     return net, optimizer
 
 
 def xc_unset_ddp(net):
-    if isinstance(net, ddp):
-        return net.module
+    #TODO Add DDP support
     return net
 
 

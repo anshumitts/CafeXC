@@ -95,6 +95,8 @@ class SampleRankerCollate(SurrogateCollate):
             print("LBLS", content["lbls"])
             print("INDEX", index.shape)
         content["index"] = index
+        if self.num_splits == 1:
+            return content
         contents = []
         lbl_ids = torch.from_numpy(lbl_ids).type(torch.LongTensor)
         for args in scatter(content, self.num_splits):

@@ -104,7 +104,7 @@ class Optimizer(object):
                         _optim = "Adam"
                 args = {"params": para, "lr": _lr}
                 module_params[_optim][key].append(args)
-                print(_lr, _optim, para.shape)
+                print(_lr, _optim, para.shape, key)
         return module_params
 
     def adjust_lr(self):

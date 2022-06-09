@@ -15,6 +15,8 @@ class ParameterBase(object):
         self.parser = argparse.ArgumentParser(description)
         self.parser.add_argument('--img_db',  default=None, action='store',
                                  type=str, help='img database')
+        self.parser.add_argument('--bucket',  default=1, action='store',
+                                 type=int, help='img database')
         self.parser.add_argument('--not_use_module2', action='store_true',
                                  help='If True, it will not perform M2')
         self.params = None

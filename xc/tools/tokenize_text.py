@@ -8,15 +8,14 @@ from xc.libs.custom_dtypes import save
 from xc.libs.utils import pbar, load_file
 from tokenizers import BertWordPieceTokenizer
 from tokenizers.processors import TemplateProcessing
-from transformers import (AutoTokenizer, CLIPTokenizer)
+from transformers import (AutoTokenizer, CLIPTokenizer, DistilBertTokenizerFast)
 
 
 def tokens(text, _tokenizer, max_len):
-    text = _tokenizer(text, truncation=True, padding=True,
-                      max_length=max_len, add_special_tokens=True)
-    input_idx = np.asarray(text.input_ids, dtype=np.int32)
-    attention = np.asarray(text.attention_mask, dtype=np.int32)
-    return input_idx, attention
+    text = _tokenizer(text, truncation=True, padding='max_length',
+                      max_length=max_len, add_special_tokens=True,
+                      return_tensors="pt", return_length=True)
+    return text.input_ids, text.attention_mask
 
 
 def to_sparse(index, mask, max_vocab):
@@ -94,7 +93,7 @@ def setup_tokenizer(txt_model):
             f"prajjwal1/{txt_model}", do_lower_case=True)
     elif txt_model in ["sentencebert"]:
         print("Using sentence bert")
-        _tokenizer = AutoTokenizer.from_pretrained(
+        _tokenizer = DistilBertTokenizerFast.from_pretrained(
             "sentence-transformers/msmarco-distilbert-base-v4",
             do_lower_case=True)
     else:

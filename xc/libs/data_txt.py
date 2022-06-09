@@ -112,10 +112,6 @@ class RAWDataset(TXTDataset):
     def get_fts(self, idx, _desc):
         data = self[idx]
         index, mask = tokens(data, self.tokenizer, self.max_len)
-        max_seq = mask.sum(axis=1).max()
-        index, mask = index[:, :max_seq], mask[:, :max_seq]
-        index = torch.from_numpy(index).type(torch.LongTensor)
-        mask = torch.from_numpy(mask).type(torch.LongTensor)
         return MultiViewData(BatchData({"mask": mask, "index": index}))
 
     def build_pre_trained(self, txt_model, data_dir, file_name,

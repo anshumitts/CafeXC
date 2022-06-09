@@ -48,8 +48,6 @@ class MufinModelBase(ModelBase):
         for key, val in data.items():
             key = list(map(lambda x: self.transfer.get(x, x), key.split(".")))
             key = ".".join(key)
-            # key = key.replace("item_encoder", "module.item_encoder")
-            # key = key.replace("label_clf.module", "module.item_encoder.module.label_clf")
             _data[key] = val
 
         try:
@@ -72,7 +70,7 @@ class MufinModelBase(ModelBase):
         with torch.no_grad():
             for batch in ut.pbar(tst_dl, desc=desc, write_final=True):
                 with torch.cuda.amp.autocast():
-                    vect, mask = self.net.encode(batch["docs"])
+                    vect, mask = self.net(batch["docs"], encode=True)
                     content.transform(vect, mask)
         self.net.cpu()
         content.compile()
@@ -91,7 +89,7 @@ class MufinModelBase(ModelBase):
         with torch.no_grad():
             for batch in ut.pbar(tst_dl, desc="extracting", write_final=True):
                 with torch.cuda.amp.autocast():
-                    data = self.net.encode(batch["docs"])
+                    data = self.net(batch["docs"], encode=True)
                     if "img_vect" in data:
                         img_content.transform(
                             data["img_vect"], data["img_mask"])
@@ -120,10 +118,23 @@ class Mufin(MufinModelBase):
         self.params.min_leaf_sz = int(self.mz + (bs - self.mz)*ce/ne)
 
     def _predict(self, tst_dset):
-        docs = self.extract_item(tst_dset)
-        vect, smat = docs.data, docs.smat
-        score = self.anns.hnsw_query(vect, self.params.batch_size)
-        return score
+        bz = int(self.params.batch_size*self.params.bucket)
+        self.net.eval()
+        torch.cuda.empty_cache()
+        self.net.to()
+        tst_dl = super().dataloader(tst_dset, "test", DocumentCollate,
+                                    batch_size=bz,
+                                    num_workers=self.params.num_workers)
+        def _out_emb(tst_dl):
+            with torch.no_grad():
+                for batch in ut.pbar(tst_dl, desc="test", write_final=True):
+                    doc, _ = self.net(batch["docs"], encode=True)
+                    yield doc.squeeze().cpu().numpy()
+        scores = []
+        for doc in _out_emb(tst_dl):
+            scores.append(self.anns.hnsw_query(doc, bz))
+            del doc
+        return sp.vstack(scores, format='csr')
 
     def predict(self, data_dir, tst_img, tst_txt, tst_lbl, lbl_img, lbl_txt):
         tst_dset = self.half_dataset(data_dir, tst_img, tst_txt)
@@ -175,19 +186,18 @@ class Mufin(MufinModelBase):
         self.evaluate(score_mat, Y_tst)
         return score_mat
 
-    def get_embs(self, dset):
+    def get_embs(self, dset, get_docs=False):
         lbls = self.extract_item(dset.L, "lbls", "test")
         lbls = lbls.mean_pooled.cpu().numpy()
-        # docs = self.extract_item(dset.X, "docs", "test")
-        # docs = docs.mean_pooled.cpu().numpy()
         docs = None
+        if get_docs:
+            docs = self.extract_item(dset.X, "docs", "test")
+            docs = docs.mean_pooled.cpu().numpy()
         return docs, lbls
 
-    def callback(self, trn_dset):
-        docs, lbls = self.get_embs(trn_dset)
-        self.anns.fit(docs, lbls, trn_dset.Y.data)
+    def callback(self, docs, lbls, ymat):
+        self.anns.fit(docs, lbls, ymat)
         self.save_anns(self.params.model_dir)
-        return docs, lbls
 
     def dataloader(self, doc_dset, mode):
         collate_fn = DocumentCollate
@@ -239,8 +249,9 @@ class Mufin(MufinModelBase):
         for epoch in np.arange(0, ws):
             _ = self.step(trn_dl, epoch)
             if (epoch) % 10 == 0 and tst_dset is not None:
-                docs, lbls = self.callback(trn_dset)
-                if self.params.not_use_module2:
+                docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
+                self.callback(docs, lbls, trn_dset.Y.data)
+                if self.params.not_use_module2:               
                     score_mat = self._predict_shorty(
                         tst_dset.X, tst_dset.shorty, lbls)
                 else:
@@ -248,14 +259,15 @@ class Mufin(MufinModelBase):
                 self.evaluate(score_mat, tst_dset.gt)
             self.save(self.params.model_dir, "model.pkl")
         if ne - ws > 0:
-            docs, lbls = self.get_embs(trn_dset)
+            docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
             trn_dl.dataset.callback_(lbls, docs, self.params)
             trn_dl.b_size = self.params.batch_size
             print(f"Rocking up the model from {ws} to {ne} epochs")
         for epoch in np.arange(ws, ne):
             _ = self.step(trn_dl, epoch)
             if (epoch) % 5 == 0:
-                docs, lbls = self.callback(trn_dset)
+                docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
+                self.callback(docs, lbls, trn_dset.Y.data)
                 trn_dl.dataset.callback_(lbls, docs, self.params)
                 if tst_dset is None:
                     continue
@@ -370,6 +382,7 @@ class MufinRanker(MufinModelBase):
             temp_dset = RankerPredictDataset(X, L, shorty)
 
         temp_dset = self.dataloader(temp_dset, "predict")
+        self.net.preset_weights(L.mean_pooled.cpu())
         self.net.to()
         self.net.eval()
         smats = []
