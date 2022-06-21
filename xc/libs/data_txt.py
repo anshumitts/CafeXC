@@ -118,7 +118,6 @@ class RAWDataset(TXTDataset):
                           params, prefix="txt.seq.memmap", thresh=5e6):
         self.max_len = params.max_len
         self.tokenizer = setup_tokenizer(txt_model)
-        return self
         if len(self.data) > thresh:
             return self
         file_name = f"{file_name}.{prefix}"
