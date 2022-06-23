@@ -28,10 +28,11 @@ def parameters(self, recurse=True):
         for p in model_parameters(self):
             yield p
 
+
 class DataParallel(torch.nn.DataParallel):
     def __init__(self, module):
         super().__init__(module)
-    
+        
     def callback(self, clean=False):
         self._replicas = None
         if not clean and self.device_ids is not None:
@@ -42,19 +43,19 @@ class DataParallel(torch.nn.DataParallel):
         return super().train(mode)
 
     def forward(self, *inputs, **kwargs):
-        if self.device_ids is None:
-            return self.module(*inputs, **kwargs)
-        
-        if self._replicas is None:
-            self.callback()
+
         inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)
         if not inputs and not kwargs:
             inputs, kwargs = ((),), ({},)
+        if len(inputs) == 1:
+            return self.module(*inputs[0], **kwargs[0])
+        if self._replicas is None:
+            self.callback()
         outputs = self.parallel_apply(self._replicas, inputs, kwargs)
         return self.gather(outputs, self.output_device)
 
     def scatter(self, inputs, kwargs, device_ids):
-       return scatter_kwargs(inputs, kwargs, device_ids) 
+        return scatter_kwargs(inputs, kwargs, device_ids)
 
     def __getattr__(self, item):
         try:
@@ -67,10 +68,10 @@ class DataParallel(torch.nn.DataParallel):
         self.src_device_obj = torch.device(device, device_ids[0])
         self.output_device = self.src_device_obj
         if len(self.device_ids) == 1:
-            self.device_ids = None 
+            self.device_ids = None
         if not clean:
             self.callback()
-    
+
     def to(self, element=torch.device("cuda:0")):
         super().to(element)
         return self

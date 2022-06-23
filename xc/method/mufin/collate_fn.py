@@ -95,10 +95,11 @@ class SampleRankerCollate(SurrogateCollate):
             print("LBLS", content["lbls"])
             print("INDEX", index.shape)
         content["index"] = index
+        lbl_ids = torch.from_numpy(lbl_ids).type(torch.LongTensor)
         if self.num_splits == 1:
+            content["u_lbl"] = lbl_ids
             return content
         contents = []
-        lbl_ids = torch.from_numpy(lbl_ids).type(torch.LongTensor)
         for args in scatter(content, self.num_splits):
             u_lbl, mapping = torch.unique(args["index"], return_inverse=True)
             args["lbls"] = self.lbls_unique(content["lbls"], u_lbl)

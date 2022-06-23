@@ -1,21 +1,22 @@
+from transformers import (AutoTokenizer, CLIPTokenizer,
+                          DistilBertTokenizerFast)
+from tokenizers.processors import TemplateProcessing
+from tokenizers import BertWordPieceTokenizer
+from xc.libs.utils import pbar, load_file
+from xc.libs.custom_dtypes import save
+import scipy.sparse as sp
+import numpy as np
+import argparse
+import tempfile
 import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
-import tempfile
-import argparse
-import numpy as np
-import scipy.sparse as sp
-from xc.libs.custom_dtypes import save
-from xc.libs.utils import pbar, load_file
-from tokenizers import BertWordPieceTokenizer
-from tokenizers.processors import TemplateProcessing
-from transformers import (AutoTokenizer, CLIPTokenizer, DistilBertTokenizerFast)
 
 
 def tokens(text, _tokenizer, max_len):
     text = _tokenizer(text, truncation=True, padding='max_length',
                       max_length=max_len, add_special_tokens=True,
                       return_tensors="pt", return_length=True)
-    return text.input_ids, text.attention_mask
+    return np.int32(text.input_ids), np.int32(text.attention_mask)
 
 
 def to_sparse(index, mask, max_vocab):

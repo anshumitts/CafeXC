@@ -145,7 +145,7 @@ def load_file(path):
     elif path.endswith(".memmap"):
         with open(path+".meta", "r") as f:
             elements = f.readline().strip().split(",")
-        if elements[0] not in ["int32", "float32"]:
+        if elements[0] not in ["int32", "int64", "float32", "float64"]:
             dtype = "float32"
             shape = tuple(map(int, elements))
         else:
