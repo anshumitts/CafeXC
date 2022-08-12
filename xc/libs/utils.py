@@ -205,14 +205,14 @@ class pbar(tqdm):
                  position=None, postfix=None, unit_divisor=1000, write_bytes=None,
                  lock_args=None, nrows=None, colour=None, delay=0, gui=False,
                  write_final=False, **kwargs):
+        self.write_final = write_final
+        self.disable = False
         super().__init__(iterable, desc, total, leave, file,
                          ncols, mininterval, maxinterval, miniters,
                          ascii, disable, unit, unit_scale,
                          dynamic_ncols, smoothing, bar_format, initial,
                          position, postfix, unit_divisor, write_bytes,
                          lock_args, nrows, colour, delay, gui, **kwargs)
-        self.write_final = write_final
-        self.disable = False
 
     def close(self):
         if self.disable:
@@ -259,7 +259,7 @@ def mean_pooling(token_embeddings, attention_mask):  # BxSqxTxD, Bx1xT
     return doc_vects / torch.clamp(input_mask_expanded.sum(-2), min=1e-5)
 
 
-@torch.jit.script
+# @torch.jit.script
 def tensor_unique(mat):
     # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
     b, s = mat.size()
