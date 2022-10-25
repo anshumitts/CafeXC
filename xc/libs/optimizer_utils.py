@@ -31,16 +31,17 @@ class Optimizer(object):
             return AdamW(params, weight_decay=0.01, eps=1e-6)
         raise NotImplementedError("Unknown optimizer!")
 
-    def construct(self, model, lr=0.01, trn_dl=[], warmup_steps=1000,
+    def construct(self, model, lr=0.01, trn_dl=[], warmup_steps=1,
                   num_epochs=10, use_scheudler=True, accumulate=1):
         self.clear()
+        model_params = self.get_params(model, lr)
+        warmup_steps = int(len(trn_dl)*warmup_steps)
+        total_steps = int(len(trn_dl)*num_epochs/accumulate)
         string = f"""
         args=(warmup_steps={warmup_steps}, num_epochs={num_epochs}, optim={self.optim},
               lr={lr}, use_scheudler={use_scheudler}, accumulate={accumulate})
         """
         print(string)
-        model_params = self.get_params(model, lr)
-        total_steps = int(len(trn_dl)*num_epochs/accumulate)
         for optim_type in model_params.keys():
             for is_sparse in model_params[optim_type].keys():
                 params = model_params[optim_type][is_sparse]

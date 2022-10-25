@@ -55,7 +55,13 @@ class OnlyData(Dataset):
         return self.X.type_dict
 
 
-class SiameseData(Dataset):
+def SiameseData(X, L, Y, multi_pos=1, mode="test", doc_first=False):
+    if doc_first:
+        return SiameseDataDOCFirst(X, L, Y, multi_pos, mode)
+    return SiameseDataLBLFirst(X, L, Y, multi_pos, mode)
+
+
+class SiameseDataLBLFirst(Dataset):
     def __init__(self, X, L, Y, multi_pos=1, mode="test"):
         self.mode = mode
         self.Y = Y
@@ -123,6 +129,35 @@ class SiameseData(Dataset):
     @property
     def type_dict(self):
         return self.X.type_dict
+
+
+class SiameseDataDOCFirst(SiameseDataLBLFirst):
+
+    def setup(self):
+        self.valid_docs = self.Y.transpose().valid_lbls
+        self.gt_rows = self.gt
+        self.order = self.valid_docs.reshape(-1, 1)
+        self.shortlist = None
+
+    def __getitem__(self, didx):
+        y = self.gt_rows[didx]
+        rpos, hpos = choice(y.indices, size=1), []
+        if self.hard_pos:
+            c = self.pos_scoring[didx]
+            i, p = c.indices, c.data / c.data.sum()
+            hpos = choice(i, size=self.n_pos, p=p).reshape(1, self.n_pos)
+        return {"hard_pos": hpos, "rand_pos": rpos, "d_idx": didx}
+
+    def callback_(self, lbl_xf=None, doc_xf=None, params=None):
+        self.hard_pos = params.hard_pos
+        if self.hard_pos:
+            self.pos_scoring = self.gt_rows
+            self.pos_scoring = ScoreEdges(self.gt_rows, doc_xf, lbl_xf,
+                                          params.batch_size)
+        doc_xf = doc_xf[self.valid_docs]
+        self.order = cluster(doc_xf, params.min_leaf_sz,
+                             params.min_splits, force_gpu=True)
+        self.order = [self.valid_docs[x] for x in self.order]
 
 
 class CrossAttention(Dataset):

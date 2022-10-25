@@ -1,6 +1,7 @@
 from sklearn.preprocessing import normalize
 from xc.libs.utils import pbar, csr_stats
 from xclib.utils import sparse as xs
+from numba import njit, prange
 from xclib.utils import graph
 from .utils import trim_rows
 import scipy.sparse as sp
@@ -17,6 +18,77 @@ def normalize_graph(mat):
     mat = r_diags.dot(mat).dot(c_diags)
     mat.eliminate_zeros()
     return mat
+
+
+@njit(parallel=True, nogil=True)
+def _random_walk(q_rng, q_lbl, l_rng, l_qry, walk_to,
+                 p_reset, hops_per_step, start, end):
+    """
+    Compute random walk for a batch of labels in the label space
+    One hop is consits of following steps:
+        1) Randomly jumping from label to a document 
+        2) Randomly jumping from the document to a document 
+    Arguments:
+    ---------
+    q_rng: np.ndarray
+        label pointers in CSR format index pointer array of the matrix
+    q_lbl: np.ndarray
+        label indices in CSR format index array of the matrix
+    l_rng: np.ndarray
+        document pointers in CSR format index pointer  array of the matrix
+    l_qry: np.ndarray
+        document indices in CSR format index pointer array of the matrix
+    walk_to: int
+        random walk length (int)
+    p_reset: int
+        random restart probability (float)
+    start: int 
+        start index of the label
+    end: int
+        last index of the label
+    Returns:
+    ---------
+    np.ndarray: np.int32 [start-end x walk_to] 
+                flattened array of indices for correlated
+                labels with duplicate entries corresponding 
+                to [start, ..., end] indices of the labels
+    np.ndarray: np.float32 [start-end x walk_to] 
+                flattened array of relevance for correlated
+                labels with duplicate entries corresponding
+                to [start, ..., end] indices of the labels
+    """
+    n_nodes = end - start
+    nbr_idx = np.zeros((n_nodes, walk_to), dtype=np.int32)
+    nbr_dat = np.zeros((n_nodes, walk_to), dtype=np.float32)
+    for idx in prange(0, n_nodes):
+        lbl_k = idx + start
+        l_start, l_end = l_rng[lbl_k], l_rng[lbl_k+1]
+        if l_start - l_end == 0:
+            continue
+        _qidx = np.random.choice(l_qry[l_start: l_end])
+        for walk in np.arange(0, walk_to):
+            p = np.random.random()
+            if p < p_reset:
+                l_start, l_end = l_rng[lbl_k], l_rng[lbl_k+1]
+                _qidx = np.random.choice(l_qry[l_start: l_end])
+            else:
+                if hops_per_step == 2:
+                    _lidx = nbr_idx[idx, walk-1]
+                    l_start, l_end = l_rng[_lidx], l_rng[_lidx+1]
+                    _qidx = np.random.choice(l_qry[l_start: l_end])
+                if hops_per_step == 3:
+                    _qidx = nbr_idx[idx, walk-1]
+            
+            q_start, q_end = q_rng[_qidx], q_rng[_qidx+1]
+            _idx = np.random.choice(q_lbl[q_start: q_end])
+            
+            if hops_per_step == 3:
+                l_start, l_end = l_rng[_idx], l_rng[_idx+1]
+                _idx = np.random.choice(l_qry[l_start: l_end])
+            
+            nbr_idx[idx, walk] = _idx
+            nbr_dat[idx, walk] = 1
+    return nbr_idx.flatten(), nbr_dat.flatten()
 
 
 def Prune(G, R, C, batch_size=1024, normalize=True):
@@ -40,14 +112,16 @@ def Prune(G, R, C, batch_size=1024, normalize=True):
 
 
 class PrunedWalk(graph.RandomWalk):
-    def __init__(self, Y, valid_labels=None, yf=None):
-        super(PrunedWalk, self).__init__(Y, valid_labels)
+    def __init__(self, Y, yf=None):
+        self.Y = Y.transpose().tocsr()
+        self.Y.sort_indices()
+        self.Y.eliminate_zeros()
         self.yf = yf
         if self.yf is not None:
             self.yf = normalize(yf)
             self.yf = yf[self.valid_labels]
 
-    def simulate(self, walk_to=100, p_reset=0.2, k=None, b_size=1000, max_dist=2):
+    def simulate(self, walk_to=100, p_reset=0.2, k=None, hops_per_step=2, b_size=1000, max_dist=2):
         q_lbl = self.Y.indices
         q_rng = self.Y.indptr
         trn_y = self.Y.transpose().tocsr()
@@ -55,16 +129,17 @@ class PrunedWalk(graph.RandomWalk):
         trn_y.eliminate_zeros()
         l_qry = trn_y.indices
         l_rng = trn_y.indptr
-        n_lbs = self.Y.shape[1]
-        zeros = 0
+        shape_idx = int(hops_per_step % 2 - 1)
+        n_lbs = self.Y.shape[shape_idx]
+        n_itm = self.Y.shape[1]
         mats = []
         pruned_edges = 0
-        for p_idx, idx in enumerate(np.arange(0, n_lbs, b_size)):
+        for p_idx, idx in enumerate(np.arange(0, n_itm, b_size)):
             if p_idx % 50 == 0:
-                print("INFO:WALK: completed [ %d/%d ]" % (idx, n_lbs))
-            start, end = idx, min(idx+b_size, n_lbs)
-            cols, data = graph._random_walk(q_rng, q_lbl, l_rng, l_qry, walk_to,
-                                            p_reset, start=start, end=end)
+                print("INFO:WALK: completed [ %d/%d ]" % (idx, n_itm))
+            start, end = idx, min(idx+b_size, n_itm)
+            cols, data = _random_walk(q_rng, q_lbl, l_rng, l_qry, walk_to,
+                                      p_reset, hops_per_step, start=start, end=end)
             rows = np.arange(end-start).reshape(-1, 1)
             rows = np.repeat(rows, walk_to, axis=1).flatten()
             mat = sp.coo_matrix((data, (rows, cols)), dtype=np.float32,
@@ -79,24 +154,14 @@ class PrunedWalk(graph.RandomWalk):
                 mat.data[_dist > max_dist] = 0
                 pruned_edges += np.sum(_dist > max_dist)
                 mat.eliminate_zeros()
-            diag = mat.diagonal(k=start)
+            
             if k is not None:
-                mat = xs.retain_topk(mat, k=k)
-            _diag = mat.diagonal(k=start)
-            _diag[_diag == 0] = diag[_diag == 0]
-            zeros += np.sum(_diag == 0)
-            _diag[_diag == 0] = 1
-            mat.setdiag(_diag, k=start)
-            mats.append(mat)
+                _mat = xs.retain_topk(mat, k=k).tocsr()
+            
+            mats.append(_mat)
             del rows, cols
-        print("INFO:WALK: completed [ %d/%d ]" % (n_lbs, n_lbs))
-        mats = sp.vstack(mats).tocsr()
-        rows, cols = mats.nonzero()
-        r_mat = sp.coo_matrix((mats.data, (rows, cols)), dtype=np.float32,
-                              shape=(self.num_lbls, self.num_lbls))
-        r_mat = xs._map(r_mat, self.valid_labels, axis=0, shape=r_mat.shape)
-        r_mat = xs._map(r_mat, self.valid_labels, axis=1, shape=r_mat.shape)
-        return r_mat.tocsr()
+        print("INFO:WALK: completed [ %d/%d ]" % (n_itm, n_itm))
+        return sp.vstack(mats, "csr")
 
 
 def print_stats(mat, k=10):

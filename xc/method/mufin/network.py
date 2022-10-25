@@ -9,6 +9,7 @@ from .models_encoders import Model as ENCModel
 class MufinMultiModal(Base):
     def __init__(self, params):
         super(MufinMultiModal, self).__init__()
+        self.doc_first = params.doc_first
         self.criterian = lossy.CustomMarginLoss(params.margin,
                                                 params.neg_sample)
         self.item_encoder = ENCModel(params)
@@ -41,12 +42,15 @@ class MufinMultiModal(Base):
         docs = normalize(vect.squeeze(1))
         hard_pos, pos_mask = None, None
         if batch['hard_pos'] is not None:
-            vect, _ = self.encode(batch['hard_pos']["docs"])
+            vect, _ = self.encode(batch['hard_pos'])
             hard_pos = normalize(vect.squeeze(1))
-            hard_pos = hard_pos[batch["hard_pos"]["index"]]
-            pos_mask = batch["hard_pos"]["mask"].to(hard_pos.device)
+            hard_pos = hard_pos[batch["hard_pos_index"]]
+            pos_mask = batch["hard_pos_mask"].to(hard_pos.device)
 
-        sim_b, sim_p = self.compute_score(lbls, docs, hard_pos, pos_mask)
+        if self.doc_first:
+            sim_b, sim_p = self.compute_score(docs, lbls, hard_pos, pos_mask)
+        else:
+            sim_b, sim_p = self.compute_score(lbls, docs, hard_pos, pos_mask)
         if self.training:
             return self.criterian(sim_b, batch["Y"], sim_p, batch["mask"])
         return sim_b

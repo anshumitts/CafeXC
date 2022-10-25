@@ -1,4 +1,5 @@
 from torch.utils.data import Dataset
+from copy import copy, deepcopy
 
 
 class NullDataset(Dataset):
@@ -6,6 +7,7 @@ class NullDataset(Dataset):
         super().__init__()
         self.data = None
         self._type = None
+        self.shape = None
 
     def __getitem__(self, idx):
         return {"x": idx}
@@ -41,4 +43,10 @@ class NullDataset(Dataset):
     @property
     def num_features(self):
         return -1
+    
+    def vstack(self, *args, **kwargs):
+        pass
+    
+    def copy(self):
+        return deepcopy(self)
 

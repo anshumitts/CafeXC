@@ -137,6 +137,10 @@ class SEQDataset(TXTDataset):
     def __init__(self, root, n_file):
         self.data = load_file(os.path.join(root, f"{n_file}"))
         self._type = "seq"
+    
+    @property
+    def shape(self):
+        return self.data.shape
 
     @property
     def valid(self):

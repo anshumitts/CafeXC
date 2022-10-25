@@ -5,8 +5,8 @@ from xc.libs.data_shorty import SHORTYDataset
 from xc.libs.data_base import NullDataset
 from xc.libs.custom_dtypes import BatchData
 from torch.utils.data import Dataset
+from copy import deepcopy
 import numpy as np
-
 
 def FtsData(data_dir, n_file, _type="img", rand_k=-1,
             max_worker_thread=10, img_db="images/img.bin"):
@@ -70,6 +70,10 @@ class GroupFts(Dataset):
 
     def __getitem__(self, idx):
         return {"x": idx}
+    
+    @property
+    def shape(self):
+        return {"txt": self.TXT.shape, "img": self.IMG.shape}
 
     @property
     def type_dict(self):
@@ -86,9 +90,14 @@ class GroupFts(Dataset):
         self.IMG.vstack(obj.IMG)
 
     def build_pre_trained(self, txt_model, img_model, file_name, params):
+        print(txt_model, img_model)
         if txt_model is not None:
             self.TXT = self.TXT.build_pre_trained(txt_model, self.data_dir,
                                                   file_name, params)
         if img_model is not None:
             self.IMG = self.IMG.build_pre_trained(img_model, self.data_dir,
-                                                  file_name, params)
+                                                  file_name, params)    
+    def copy(self):
+        return deepcopy(self)
+
+

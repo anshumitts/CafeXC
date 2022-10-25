@@ -7,10 +7,10 @@ import torch
 choice = np.random.default_rng().choice
 
 
-
 class SurrogateCollate(collateBase):
     def __init__(self, dset, params):
         super().__init__(dset)
+        self.doc_first = params.doc_first
 
     def build_content(self, doc_ids, lbl_ids, b_dict):
         b_dict['b_size'] = len(doc_ids)
@@ -18,19 +18,19 @@ class SurrogateCollate(collateBase):
         b_dict["docs"] = data["docs"]
         b_dict["lbls"] = data["lbls"]
 
-    def _call_(self, batch):
+    def call_batch_doc(self, batch):
         d_batch = BatchData({})
-        d_batch["hard_pos"] = BatchData({})
-        hard_pos, lbl_ids, ts_mats, rand_pos = [], [], [], []
+        hard_pos, docs_ids, rand_pos = [], [], []
         for data in batch:
             hard_pos.append(data["hard_pos"])
             rand_pos.extend(data["rand_pos"])
-            lbl_ids.append(data["l_idx"])
-            ts_mats.append(data["y"])
+            docs_ids.append(data["d_idx"])
         rand_pos = np.uint32(rand_pos)
-        lbl_ids = np.uint32(lbl_ids)
-        y = sp.vstack(ts_mats).tocsc()[:, rand_pos].todense()
+        docs_ids = np.uint32(docs_ids)
+        y = self.dset.gt_rows[docs_ids]
         hard_pos = np.int32(np.vstack(hard_pos))
+        keys = ["docs", "lbls"]
+        d_batch["hard_pos"] = None
         if hard_pos.size > 0:
             mask = np.ones_like(hard_pos)
             mask[hard_pos == -1] = 0
@@ -38,21 +38,60 @@ class SurrogateCollate(collateBase):
             shape = mask.shape
             hard_items, hard_index = np.unique(hard_pos, return_inverse=True)
             hard_index = hard_index.reshape(*shape)
-            self.build_content(hard_items, None, d_batch["hard_pos"])
-            d_batch["hard_pos"] = pre_split(d_batch["hard_pos"], ["docs"],
-                                            self.num_splits)
+            d_batch["hard_pos"] = self.dset.L.get_fts(hard_items)
+            hard_index = torch.from_numpy(hard_index).type(torch.LongTensor)
+            mask = torch.from_numpy(mask).type(torch.FloatTensor)
+            d_batch["hard_pos_index"] = hard_index
+            d_batch["hard_pos_mask"] = mask
+            keys.append("hard_pos")
+
+        if docs_ids.size > 1:
+            d_batch["docs"] = self.dset.X.get_fts(docs_ids)
+            d_batch["lbls"] = self.dset.L.get_fts(rand_pos)
+        d_batch = pre_split(d_batch, keys, self.num_splits)
+        y = y.tocsc()[:, rand_pos].todense()
+        d_batch["Y"] = torch.from_numpy(y).type(torch.FloatTensor)
+        return d_batch
+
+    def call_batch_lbl(self, batch):
+        d_batch = BatchData({})
+        hard_pos, lbls_ids, rand_pos = [], [], []
+        for data in batch:
+            hard_pos.append(data["hard_pos"])
+            rand_pos.extend(data["rand_pos"])
+            lbls_ids.append(data["d_idx"])
+        rand_pos = np.uint32(rand_pos)
+        lbls_ids = np.uint32(lbls_ids)
+        y = self.dset.gt_rows[lbls_ids]
+        hard_pos = np.int32(np.vstack(hard_pos))
+        keys = ["docs", "lbls"]
+        d_batch["hard_pos"] = None
+        if hard_pos.size > 0:
+            mask = np.ones_like(hard_pos)
+            mask[hard_pos == -1] = 0
+            hard_pos[mask == 0] = 0
+            shape = mask.shape
+            hard_items, hard_index = np.unique(hard_pos, return_inverse=True)
+            hard_index = hard_index.reshape(*shape)
+            d_batch["hard_pos"] = self.dset.X.get_fts(hard_items)
             hard_index = torch.from_numpy(hard_index).type(torch.LongTensor)
             mask = torch.from_numpy(mask).type(torch.FloatTensor)
             d_batch["hard_pos"]["index"] = hard_index
             d_batch["hard_pos"]["mask"] = mask
-        else:
-            d_batch["hard_pos"] = None
-        if lbl_ids.size > 1:
-            self.build_content(rand_pos, lbl_ids, d_batch)
-            d_batch = pre_split(d_batch, ["docs", "lbls"], self.num_splits)
-            d_batch["Y"] = torch.from_numpy(y).type(torch.FloatTensor)
-            return d_batch
-        return None
+            keys.append("hard_pos")
+
+        if lbls_ids.size > 1:
+            d_batch["docs"] = self.dset.X.get_fts(rand_pos)
+            d_batch["lbls"] = self.dset.L.get_fts(lbls_ids)
+        d_batch = pre_split(d_batch, keys, self.num_splits)
+        y = y.tocsc()[:, rand_pos].todense()
+        d_batch["Y"] = torch.from_numpy(y).type(torch.FloatTensor)
+        return d_batch
+
+    def _call_(self, batch):
+        if self.doc_first:
+            return self.call_batch_doc(batch)
+        return self.call_batch_lbl(batch)
 
 
 class SampleRankerCollate(SurrogateCollate):

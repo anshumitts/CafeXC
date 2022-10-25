@@ -19,6 +19,9 @@ class ParameterBase(object):
                                  type=int, help='img database')
         self.parser.add_argument('--not_use_module2', action='store_true',
                                  help='If True, it will not perform M2')
+        
+        self.parser.add_argument('--doc_first', action='store_true',
+                                 help='If True, mini batch will be made on document side')
         self.params = None
         self._construct()
 

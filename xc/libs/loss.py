@@ -153,13 +153,10 @@ class CustomMarginLoss(_Loss):
         B = target.size(0)
         target = target.to(sim_b.device)
         if sim_p is None:
-            if sim_b.size(0) != sim_b.size(1):
-                MX_LIM = torch.full_like(sim_b, self.mx_lim)
-                sim_p = sim_b.where(target == 1, MX_LIM)
-                indices = sim_p.topk(largest=False, dim=1, k=self.num_pos)[1]
-                sim_p = sim_p.gather(1, indices)
-            else:
-                sim_p = sim_b.diagonal().view(B, 1)
+            MX_LIM = torch.full_like(sim_b, self.mx_lim)
+            sim_p = sim_b.where(target == 1, MX_LIM)
+            indices = sim_p.topk(largest=False, dim=1, k=self.num_pos)[1]
+            sim_p = sim_p.gather(1, indices)
         MN_LIM = torch.full_like(sim_b, self.mn_lim)
 
         _, num_pos = sim_p.size()

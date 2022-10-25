@@ -14,12 +14,6 @@ from collections import OrderedDict
 class MufinModelBase(ModelBase):
     def __init__(self, params, network, optimizer):
         super().__init__(params, network, optimizer)
-        self.transfer = {"MultiModalSiameseXC": "MufinMultiModal", "Ranker": "MufinRanker",
-                         "XAttnRanker": "MufinXAttnRanker", "XAttnRankerpp": "MufinXAttnRankerpp",
-                         "XAttnRankerv": "MufinXAttnRankerv", "XAttnRankervpp": "MufinXAttnRankervpp",
-                         "NGAME": "MufinOva", "NGAMEpp": "MufinOvapp", "MultiModalImageXC": "MufinMultiModalImageXC",
-                         "PreTrainedMultiModalSiameseXC": "PreTrainedMufinMultiModal",
-                         "PreTrainedSiameseImageXML": "PreTrainedMufinImageXML", "SiameseTextXML": "MufinTextXML"}
 
     def half_dataset(self, data_dir, doc_img, doc_txt, mode="docs"):
         rand_k = int(os.environ["KEEP_TOP_K"])
@@ -44,17 +38,7 @@ class MufinModelBase(ModelBase):
         print("Loading model..")
         self.filter.load(os.path.join(model_dir, f"filter_{fname}"))
         data = torch.load(os.path.join(model_dir, fname))
-        _data = OrderedDict()
-        for key, val in data.items():
-            key = list(map(lambda x: self.transfer.get(x, x), key.split(".")))
-            key = ".".join(key)
-            _data[key] = val
-
-        try:
-            self.net.load_state_dict(_data)
-        except RuntimeError as e:
-            print("Unwrapping Distributed DDP.")
-            self.net.module.load_state_dict(_data)
+        self.net.load_state_dict(data)
 
     def extract_item(self, tst_dset, desc="docs", mode="test"):
         content = FeaturesAccumulator(f"{desc} content")
@@ -125,6 +109,7 @@ class Mufin(MufinModelBase):
         tst_dl = super().dataloader(tst_dset, "test", DocumentCollate,
                                     batch_size=bz,
                                     num_workers=self.params.num_workers)
+
         def _out_emb(tst_dl):
             with torch.no_grad():
                 for batch in ut.pbar(tst_dl, desc="test", write_final=True):
@@ -173,7 +158,7 @@ class Mufin(MufinModelBase):
         X_tst = self.half_dataset(data_dir, tst_img, tst_txt)
         Y_tst = self.load_ground_truth(data_dir, tst_lbl).data
         self.load(self.params.model_dir, "model.pkl")
-        self.anns.use_hnsw = True
+        self.anns.use_hnsw = False
         self.load_anns(self.params.model_dir)
         docs, lbls = ut.load_overlap(self.params.data_dir,
                                      self.params.filter_labels)
@@ -195,7 +180,7 @@ class Mufin(MufinModelBase):
             docs = docs.mean_pooled.cpu().numpy()
         return docs, lbls
 
-    def callback(self, docs, lbls, ymat):
+    def callback(self, docs, lbls, ymat, epoch=None):
         self.anns.fit(docs, lbls, ymat)
         self.save_anns(self.params.model_dir)
 
@@ -250,8 +235,8 @@ class Mufin(MufinModelBase):
             _ = self.step(trn_dl, epoch)
             if (epoch) % 10 == 0 and tst_dset is not None:
                 docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
-                self.callback(docs, lbls, trn_dset.Y.data)
-                if self.params.not_use_module2:               
+                self.callback(docs, lbls, trn_dset.Y.data, epoch)
+                if self.params.not_use_module2:
                     score_mat = self._predict_shorty(
                         tst_dset.X, tst_dset.shorty, lbls)
                 else:
@@ -267,7 +252,7 @@ class Mufin(MufinModelBase):
             _ = self.step(trn_dl, epoch)
             if (epoch) % 5 == 0:
                 docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
-                self.callback(docs, lbls, trn_dset.Y.data)
+                self.callback(docs, lbls, trn_dset.Y.data, epoch)
                 trn_dl.dataset.callback_(lbls, docs, self.params)
                 if tst_dset is None:
                     continue
@@ -287,7 +272,8 @@ class Mufin(MufinModelBase):
         X_trn = self.half_dataset(data_dir, trn_img, trn_txt)
         Y_trn = self.load_ground_truth(data_dir, trn_lbl)
         L = self.half_dataset(data_dir, lbl_img, lbl_txt)
-        trn_dset = SiameseData(X_trn, L, Y_trn, multi_pos, "train")
+        trn_dset = SiameseData(X_trn, L, Y_trn, multi_pos,
+                               "train", self.params.doc_first)
         if self.params.not_use_module2:
             trn_shorty = self.load_ground_truth(
                 data_dir, self.params.trn_shorty, "shorty")
