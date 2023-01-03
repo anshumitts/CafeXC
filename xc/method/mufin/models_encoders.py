@@ -86,16 +86,13 @@ class MultiModalEncoder(ModalEncoder):
             masks.append(content[key]["mask"])
         vects = torch.cat(vects, dim=1)
         masks = torch.cat(masks, dim=1)
-        if self.module == 3:
-            return {"txt_vect": vects, "txt_mask": masks}
-
-        if self.module in [1, 2, 4]:
-            vect, mask, attn = self.merge_embds(vects, masks, apply_pooling=pool,
-                                                output_attn_wts=output_attn_wts)
-            if output_attn_wts:
-                return vect, mask, attn
-            else:
-                return vect, mask
+        
+        vect, mask, attn = self.merge_embds(vects, masks, apply_pooling=pool,
+                                            output_attn_wts=output_attn_wts)
+        if output_attn_wts:
+            return vect, mask, attn
+        else:
+            return vect, mask
 
 
 class VisualBert(ModalEncoder):

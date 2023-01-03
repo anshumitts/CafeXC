@@ -125,8 +125,7 @@ class ANNSBox(object):
         return self.brute_query(docs, batch_size)
 
     def brute_query(self, docs, batch_size):
-        if self.use_hnsw:
-            return self.hnsw_query(docs, batch_size)
+        print("Using Brute force")
         return self._exact_search(docs, self.lbls_emb, self.num_labels,
                                   batch_size, self.top_k, "brute_emb")
 

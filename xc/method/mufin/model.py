@@ -250,12 +250,13 @@ class Mufin(MufinModelBase):
             print(f"Rocking up the model from {ws} to {ne} epochs")
         for epoch in np.arange(ws, ne):
             _ = self.step(trn_dl, epoch)
-            if (epoch) % 5 == 0:
+            if (epoch) % self.params.cl_update == 0:
                 docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
                 self.callback(docs, lbls, trn_dset.Y.data, epoch)
                 trn_dl.dataset.callback_(lbls, docs, self.params)
+            if (epoch) % self.params.validate_after == 0:
                 if tst_dset is None:
-                    continue
+                    pass
                 if self.params.not_use_module2:
                     score_mat = self._predict_shorty(
                         tst_dset.X, tst_dset.shorty, lbls)

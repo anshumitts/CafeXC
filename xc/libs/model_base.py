@@ -1,4 +1,4 @@
-from xclib.evaluation.xc_metrics import precision, ndcg, format, recall
+from xclib.evaluation.xc_metrics import precision, ndcg, format, recall, compute_inv_propesity, psprecision
 from .utils import pbar, aggregate, xc_set_ddp, xc_unset_ddp
 from xc.libs.dataloader import DataLoader as dl
 from .model_utils import FilterShortlist
@@ -125,9 +125,12 @@ class ModelBase:
         _prec = precision(pred_mat, true_mat, k=5)
         _ndcg = ndcg(pred_mat, true_mat, k=5)
         _recall = recall(pred_mat, true_mat, k=self.params.top_k)
+        inv_prop = compute_inv_propesity(true_mat, self.params.A, self.params.B)
+        _psp = psprecision(pred_mat, true_mat, inv_prop, k=5)
         print(f"recall@{self.params.top_k}-> {_recall[-1]*100}")
         print(f"prec-> {format(_prec[::2])}")
         print(f"ndcg-> {format(_ndcg[::2])}")
+        print(f"psp-> {format(_psp[::2])}")
 
     def evaluate(self, pred_mat, true_mat):
         if isinstance(pred_mat, dict):

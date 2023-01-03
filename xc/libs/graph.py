@@ -9,15 +9,27 @@ import numpy as np
 
 
 def normalize_graph(mat):
-    diags = mat.diagonal()
-    print("Zero Diagonals:", np.sum(diags == 0))
-    col_nnz = np.sqrt(1/np.ravel(mat.sum(axis=0)))
-    row_nnz = np.sqrt(1/np.ravel(mat.sum(axis=1)))
+    col_nnz = np.sqrt(1/(np.ravel(mat.sum(axis=0))+1e-6))
+    row_nnz = np.sqrt(1/(np.ravel(mat.sum(axis=1))+1e-6))
     c_diags = sp.diags(col_nnz)
     r_diags = sp.diags(row_nnz)
     mat = r_diags.dot(mat).dot(c_diags)
     mat.eliminate_zeros()
     return mat
+
+
+def clean_graphs(min_freq=2, max_freq=100, *graphs):
+    smats = sp.vstack([graph.data for graph in graphs], "csr")
+    node_freq = np.ravel(smats.getnnz(axis=0))
+    num_nodes = node_freq.size
+    keep_nodes = np.ones(num_nodes)
+    keep_nodes[node_freq > max_freq] = 0
+    keep_nodes[node_freq <= min_freq] = 0
+    diag = sp.diags(keep_nodes, shape=(num_nodes, num_nodes))
+    for i in range(len(graphs)):
+        graphs[i].data = graphs[i].data.dot(diag)
+        graphs[i].data.eliminate_zeros()
+    return graphs
 
 
 @njit(parallel=True, nogil=True)
@@ -78,14 +90,14 @@ def _random_walk(q_rng, q_lbl, l_rng, l_qry, walk_to,
                     _qidx = np.random.choice(l_qry[l_start: l_end])
                 if hops_per_step == 3:
                     _qidx = nbr_idx[idx, walk-1]
-            
+
             q_start, q_end = q_rng[_qidx], q_rng[_qidx+1]
             _idx = np.random.choice(q_lbl[q_start: q_end])
-            
+
             if hops_per_step == 3:
                 l_start, l_end = l_rng[_idx], l_rng[_idx+1]
                 _idx = np.random.choice(l_qry[l_start: l_end])
-            
+
             nbr_idx[idx, walk] = _idx
             nbr_dat[idx, walk] = 1
     return nbr_idx.flatten(), nbr_dat.flatten()
@@ -154,14 +166,14 @@ class PrunedWalk(graph.RandomWalk):
                 mat.data[_dist > max_dist] = 0
                 pruned_edges += np.sum(_dist > max_dist)
                 mat.eliminate_zeros()
-            
-            if k is not None:
-                _mat = xs.retain_topk(mat, k=k).tocsr()
-            
-            mats.append(_mat)
+            mats.append(mat)
             del rows, cols
         print("INFO:WALK: completed [ %d/%d ]" % (n_itm, n_itm))
-        return sp.vstack(mats, "csr")
+        mats = sp.vstack(mats, "csr")
+        mats = normalize_graph(mats)
+        if k is not None:
+            mats = xs.retain_topk(mats, k=k).tocsr()
+        return mats
 
 
 def print_stats(mat, k=10):

@@ -35,7 +35,7 @@ def load_pre_trained(model):
     if model in ["Identity"]:
         return None
     elif model in ["ViT"]:
-        return ViTModel.from_pretrained("google/vit-base-patch32-224-in21k")
+        return ViTModel.from_pretrained("google/vit-base-patch16-224")
     elif model in ["BeiT"]:
         return BeitModel.from_pretrained("microsoft/beit-base-patch16-224-pt22k")
     elif model in ["Dino"]:

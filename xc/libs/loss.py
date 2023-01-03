@@ -1,4 +1,3 @@
-# losses
 import torch
 import torch.nn.functional as F
 
@@ -141,8 +140,9 @@ class CosineEmbeddingLoss(_Loss):
 class CustomMarginLoss(_Loss):
 
     def __init__(self, margin=1, num_neg=3, num_pos=1,
-                 mn_lim=-50.0, mx_lim=50.0, reduction='mean'):
+                 mn_lim=-50.0, mx_lim=50.0, tau=0.1, reduction='mean'):
         super(CustomMarginLoss, self).__init__(reduction=reduction)
+        self.tau = tau
         self.margin = margin
         self.num_neg = num_neg
         self.mn_lim = mn_lim
@@ -167,9 +167,10 @@ class CustomMarginLoss(_Loss):
         sim_n = sim_n.unsqueeze(1).repeat_interleave(num_pos, dim=1)
 
         loss = F.relu(sim_n - sim_p + self.margin)
-        prob = loss.clone().detach()
-        prob.masked_fill_(prob == 0, self.mn_lim)
-        loss = F.softmax(prob, dim=-1)*loss
+        prob = sim_n / self.tau
+        prob[loss == 0] = self.mn_lim
+        prob = torch.softmax(prob, dim=1) #TODO Correct loss masking
+        loss = loss * prob
         return self._reduce(loss.sum(dim=-1)).unsqueeze(0)
 
     def extra_repr(self):
