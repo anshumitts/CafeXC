@@ -70,6 +70,8 @@ class SentenceBert(TxtEncoderBase):
         if keep_last == -1:
             return
         super().freeze_params()
+        if keep_last is None:
+            return
         for params in self.features.transformer.layer[-keep_last:].parameters():
             params.requires_grad = True
 

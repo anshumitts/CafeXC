@@ -73,8 +73,8 @@ class MufinRanker(Base):
             self.item_encoder.remove_encoders(False, True)
         if "Image" in params.model_fname:
             self.item_encoder.remove_encoders(True, False)
-        if "PreTrained" in params.model_fname:
-            self.item_encoder.set_pretrained()
+        # if "PreTrained" in params.model_fname:
+        #     self.item_encoder.set_pretrained()
         self.params = params
         self.set_for_multi_gpu()
 

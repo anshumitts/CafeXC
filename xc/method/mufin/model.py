@@ -313,6 +313,20 @@ class MufinRanker(MufinModelBase):
         super(MufinRanker, self).__init__(params, network, optimizer)
         self.anns = ANNSBox(num_labels=params.num_labels, top_k=params.top_k)
         self.fusion = Fusion(use_psp=True, A=params.A, B=params.B)
+    
+    def half_dataset(self, data_dir, doc_img, doc_txt, mode="docs"):
+        rand_k = int(os.environ["KEEP_TOP_K"])
+        feat = GroupFts(data_dir, doc_img, doc_txt, _type=mode, rand_k=rand_k,
+                        max_worker_thread=self.params.max_worker_thread,
+                        img_db=self.params.img_db)
+        txt_model = self.params.txt_model
+        img_model, f_name = None, None
+        if doc_txt is not None:
+            f_name = doc_txt.split("/")[-1].split(".")[0]
+        elif doc_img is not None:
+            f_name = doc_img.split("/")[-1].split(".")[0]
+        feat.build_pre_trained(txt_model, img_model, f_name, self.params)
+        return feat
 
     def dataloader(self, doc_dset, mode):
         batch_size = self.params.batch_size

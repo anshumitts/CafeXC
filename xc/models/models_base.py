@@ -29,7 +29,6 @@ class Base(torch.nn.Module):
             module = self.mm_encoder.module.eval()
         else:
             module = self.mm_encoder.eval()
-        module.merge_embds = None
         return module.state_dict()
 
     def init_encoder(self, path):

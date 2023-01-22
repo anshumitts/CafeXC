@@ -44,12 +44,8 @@ class QuadraticAttention(nn.Module):
     def forward(self, q, k, v, mask):
         E = q.size(-1)
         scr = torch.einsum("nlhe,nshe->nhls", q/np.sqrt(E), k)  # BxhxT2xT1
-        sign = scr.sign()
-        scr.abs_()
         scr.masked_fill_(mask == 0, -float("inf"))
-        scr = self.activation(scr)*sign
-        # scr.masked_fill_(mask == 0, -float("inf"))
-        # scr = self.activation(scr)
+        scr = self.activation(scr)
         scr = self.drop(scr)  # BxhxT2xT1
         return torch.einsum("nhls,nshe->nlhe", scr, v).contiguous(), scr
 

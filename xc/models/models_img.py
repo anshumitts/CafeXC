@@ -35,7 +35,7 @@ def load_pre_trained(model):
     if model in ["Identity"]:
         return None
     elif model in ["ViT"]:
-        return ViTModel.from_pretrained("google/vit-base-patch16-224")
+        return ViTModel.from_pretrained("google/vit-base-patch32-224-in21k")
     elif model in ["BeiT"]:
         return BeitModel.from_pretrained("microsoft/beit-base-patch16-224-pt22k")
     elif model in ["Dino"]:
@@ -213,14 +213,14 @@ class ModelInceptionNetV3(ImgEncoderBase):
 class ModelViT(ImgEncoderBase):
     def __init__(self, model, transf, params):
         super(ModelViT, self).__init__(model, transf, params.project_dim)
-        self.project = nn.Sequential(self.features.layernorm)
+        self.features.project = self.features.layernorm
         self.features.pooler = None
         self.features.layernorm = nn.Sequential()
 
     def encode(self, images):
         images = self.transform(images)
         images = self.features(images, interpolate_pos_encoding=True)
-        images = self.project(images[0][:, 0])
+        images = self.features.project(images[0][:, 0])
         return images.unsqueeze(1)
 
     @property
@@ -231,6 +231,8 @@ class ModelViT(ImgEncoderBase):
         if keep_last == -1:
             return
         super().freeze_params()
+        if keep_last is None:
+            return
         for params in self.features.encoder.layer[-keep_last:].parameters():
             params.requires_grad = True
 

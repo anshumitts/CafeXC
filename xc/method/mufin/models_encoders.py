@@ -49,7 +49,7 @@ class ModalEncoder(Base):
         if self.img_encoder is not None:
             self.img_encoder.freeze_params(keep_layer)
         if self.txt_encoder is not None:
-            self.txt_encoder.freeze_params(keep_layer)
+            self.txt_encoder.freeze_params(-1)
 
     def set_pretrained(self):
         self.img_encoder = self.img_encoder.set_pretrained()

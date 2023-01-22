@@ -59,7 +59,7 @@ class SurrogateCollate(collateBase):
         for data in batch:
             hard_pos.append(data["hard_pos"])
             rand_pos.extend(data["rand_pos"])
-            lbls_ids.append(data["d_idx"])
+            lbls_ids.append(data["l_idx"])
         rand_pos = np.uint32(rand_pos)
         lbls_ids = np.uint32(lbls_ids)
         y = self.dset.gt_rows[lbls_ids]
@@ -76,8 +76,8 @@ class SurrogateCollate(collateBase):
             d_batch["hard_pos"] = self.dset.X.get_fts(hard_items)
             hard_index = torch.from_numpy(hard_index).type(torch.LongTensor)
             mask = torch.from_numpy(mask).type(torch.FloatTensor)
-            d_batch["hard_pos"]["index"] = hard_index
-            d_batch["hard_pos"]["mask"] = mask
+            d_batch["hard_pos_index"] = hard_index
+            d_batch["hard_pos_mask"] = mask
             keys.append("hard_pos")
 
         if lbls_ids.size > 1:
