@@ -7,8 +7,13 @@ import torch
 class Base(torch.nn.Module):
     def __init__(self):
         super().__init__()
+        self._to_device = torch.device("cpu")
+        if torch.cuda.is_available():
+            self._to_device = torch.device("cuda:0")
 
-    def to(self, element=torch.device("cuda:0")):
+    def to(self, element=None):
+        if element is None:
+            element = self._to_device
         super().to(element)
         return self
 
@@ -29,6 +34,7 @@ class Base(torch.nn.Module):
             module = self.mm_encoder.module.eval()
         else:
             module = self.mm_encoder.eval()
+        module.merge_embds = None
         return module.state_dict()
 
     def init_encoder(self, path):

@@ -57,13 +57,13 @@ class ModelBase:
         self.optim.construct(self.net, lr=self.params.lr, accumulate=self.accumulate,
                              trn_dl=dl, warmup_steps=warmup_steps,
                              num_epochs=self.params.num_epochs)
-
+    
     def step(self, dataloader, n_epoch):
         self.net = self.net.to()
         self.net = self.net.train()
         self.net.callback()
         self.params.curr_epoch = n_epoch
-        _loss, gpu_time, iter_batch = 0, 0, 0
+        _loss, iter_batch = {}, 0
         deno = len(dataloader)
         for batch in pbar(dataloader, write_final=True,
                           desc="(Epoch:%03d)" % (n_epoch)):
@@ -71,11 +71,11 @@ class ModelBase:
             if batch is None:
                 continue
             with torch.cuda.amp.autocast():
-                s_g_time = time.time()
                 output = self.net(batch)
-                gpu_time += (time.time() - s_g_time)/deno
-                loss = output.mean()
-                _loss += loss.item()/deno
+                loss = 0
+                for _k, _l in output.items():
+                    loss += _l
+                    _loss[_k] = _loss.get(_k, 0) + _l.item()/deno
             self.scaler.scale(loss).backward()
             if iter_batch % self.accumulate == 0 or \
                     iter_batch % len(dataloader) == 0:
@@ -87,7 +87,7 @@ class ModelBase:
             del batch
         self.net = self.net.eval()
         self.net = self.net.cpu()
-        print(f"Avg. loss {_loss} GPU time {gpu_time}")
+        print(f"Avg. loss {_loss}")
         return _loss
 
     def predict(self, data_dir, tst_img, tst_txt, tst_lbl, **kwargs):

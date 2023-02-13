@@ -1,11 +1,27 @@
 from sklearn.preprocessing import normalize
-from xc.libs.utils import pbar, csr_stats
+from xc.libs.utils import pbar
 from xclib.utils import sparse as xs
 from numba import njit, prange
 from xclib.utils import graph
-from .utils import trim_rows
 import scipy.sparse as sp
 import numpy as np
+
+
+def trim_rows(smat, index):
+    print(f"UTILS::TRIMMING::#ROWS({index.size})")
+    num_rows = smat.shape[0]
+    rows = np.ones(num_rows, dtype=np.int32)
+    rows[index] = 0
+    diag = sp.diags(rows, shape=(num_rows, num_rows))
+    return diag.dot(smat).tocsr()
+
+
+def csr_stats(mat, name="mat"):
+    print(f"{name}")
+    print(f"\tSHAPE:{mat.shape}")
+    print(f"\tNNZ:{mat.nnz}")
+    print(f"\tNNZ(axis=0):{np.where(np.ravel(mat.getnnz(axis=0))>0)[0].size}")
+    print(f"\tNNZ(axis=1):{np.where(np.ravel(mat.getnnz(axis=1))>0)[0].size}")
 
 
 def normalize_graph(mat):

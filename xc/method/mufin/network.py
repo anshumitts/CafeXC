@@ -52,7 +52,11 @@ class MufinMultiModal(Base):
         else:
             sim_b, sim_p = self.compute_score(lbls, docs, hard_pos, pos_mask)
         if self.training:
-            return self.criterian(sim_b, batch["Y"], sim_p, batch["mask"])
+            loss = self.criterian(sim_b, batch["Y"], sim_p, batch["mask"])
+            if np.isnan(loss.item()):
+                import pdb; pdb.set_trace()
+                    
+            return {"DL": loss}
         return sim_b
 
     def compute_score(self, lbls, docs, hard_pos=None, pos_mask=None):
@@ -73,8 +77,8 @@ class MufinRanker(Base):
             self.item_encoder.remove_encoders(False, True)
         if "Image" in params.model_fname:
             self.item_encoder.remove_encoders(True, False)
-        # if "PreTrained" in params.model_fname:
-        #     self.item_encoder.set_pretrained()
+        if "PreTrained" in params.model_fname:
+            self.item_encoder.set_pretrained()
         self.params = params
         self.set_for_multi_gpu()
 
@@ -105,8 +109,7 @@ class MufinRanker(Base):
         output, _ = self.item_encoder(batch["content"], overwrite=overwrite)
         torch.cuda.synchronize()
         if self.training:
-            torch.cuda.synchronize()
-            return self.criterian(output, batch["Y"], mask=batch["mask"])
+            return {"DL": self.criterian(output, batch["Y"], mask=batch["mask"])}
         return output
 
     def clf_init(self, clf_vects):

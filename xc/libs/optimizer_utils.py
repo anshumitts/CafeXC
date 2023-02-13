@@ -9,7 +9,7 @@ import numpy as np
 
 class Optimizer(object):
     def __init__(self, special=["bias", "LayerNorm"],
-                 type_scheudle="cosine", optim="Adam"):
+                 type_scheudle="linear", optim="Adam"):
         self.optimizer = {}
         self.scheudler = {}
         self.optim = optim
@@ -95,7 +95,7 @@ class Optimizer(object):
 
                 if (np.intersect1d(p_name, self.special).size > 0
                         or isinstance(child, self.ignore)):
-                    _optim = "Adam"
+                    _optim = self.optim
 
                 if not (np.intersect1d(p_name, self.special).size > 0
                         or isinstance(child, self.ignore)):

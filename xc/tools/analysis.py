@@ -158,18 +158,24 @@ def _split_based_on_frequency(freq, num_splits):
 
 def _pointwise_eval(score_mats, sorted_mats, tst_mat, topk, metric="P"):
     score_mats = _load_mat_keep_topk(score_mats, topk)
+    doc_lbl_freq = tst_mat.sum(axis=0)
     scores = {}
     for key in sorted_mats:
         _mat = score_mats[key].multiply(tst_mat)
         _mat.eliminate_zeros()
         _mat.data[:] = 1
         if metric == "P":
-            _mat = _mat.multiply(1/topk)
+            _mat = _mat.multiply(1/(topk*tst_mat.shape[0]))
         
         if metric == "R":
-            deno = np.maximum(tst_mat.sum(axis=1), 1000)
+            deno = tst_mat.sum(axis=1)*tst_mat.shape[0]
             _mat = _mat.multiply(1/deno)
-        scores[key] = np.ravel(_mat.sum(axis=0))/(tst_mat.shape[0])
+        
+        if metric == "%FN":
+            _mat = tst_mat - _mat
+            _mat.eliminate_zeros()
+            _mat = _mat.multiply(1/(doc_lbl_freq*tst_mat.shape[1]))
+        scores[key] = np.ravel(_mat.sum(axis=0))
     return scores
 
 
@@ -221,6 +227,5 @@ def decile_plot(score_mats, sorted_mats, topk, num_splits, tst_mat, trn_mat,
                 metric="P", title="Dataset", out_file="test.pdf"):    
     scores = _pointwise_eval(score_mats, sorted_mats, tst_mat, topk, metric)
     doc_frq = np.ravel(trn_mat.sum(axis=0))
-    _decile_plot(scores, doc_frq, num_splits, f"{metric}@{topk}", title, out_file)
-    
-    
+    label = f"{metric}@{topk}" if metric in ["P", "R"] else metric
+    _decile_plot(scores, doc_frq, num_splits, label, title, out_file)

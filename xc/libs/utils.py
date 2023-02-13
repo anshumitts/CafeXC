@@ -26,17 +26,6 @@ def xc_unset_ddp(net):
     return net
 
 
-def fasterTxtRead(file, chunk=100000, encoding="latin1"):
-    with open(file, "r", encoding=encoding) as file:
-        data = []
-        while True:
-            lines = file.readlines(chunk)
-            if not lines:
-                break
-            data.extend(lines)
-    return data
-
-
 @nb.njit(cache=True)
 def bin_index(array, item):  # Binary search
     first, last = 0, len(array) - 1
@@ -52,6 +41,17 @@ def bin_index(array, item):  # Binary search
             first = mid + 1
 
     return -1
+
+
+def fasterTxtRead(file, chunk=100000, encoding="latin1"):
+    with open(file, "r", encoding=encoding) as file:
+        data = []
+        while True:
+            lines = file.readlines(chunk)
+            if not lines:
+                break
+            data.extend(lines)
+    return data
 
 
 @nb.jit(nb.types.Tuple(
@@ -98,23 +98,6 @@ def aggregate(ind, ptr, dat):
     return _ind, _ptr, _dat
 
 
-def trim_rows(smat, index):
-    print(f"UTILS::TRIMMING::#ROWS({index.size})")
-    num_rows = smat.shape[0]
-    rows = np.ones(num_rows, dtype=np.int32)
-    rows[index] = 0
-    diag = sp.diags(rows, shape=(num_rows, num_rows))
-    return diag.dot(smat).tocsr()
-
-
-def csr_stats(mat, name="mat"):
-    print(f"{name}")
-    print(f"\tSHAPE:{mat.shape}")
-    print(f"\tNNZ:{mat.nnz}")
-    print(f"\tNNZ(axis=0):{np.where(np.ravel(mat.getnnz(axis=0))>0)[0].size}")
-    print(f"\tNNZ(axis=1):{np.where(np.ravel(mat.getnnz(axis=1))>0)[0].size}")
-
-
 def ScoreEdges(graph, lbl_emb=None, doc_emb=None, batch_size=5000):
     lbl_emb = normalize(lbl_emb)
     doc_emb = normalize(doc_emb)
@@ -140,6 +123,8 @@ def load_file(path):
         return sp.load_npz(path)
     elif path.endswith(".npy"):
         return np.load(path)
+    elif path.endswith(".pt"):
+        return torch.load(path)
     elif path.endswith(".pkl"):
         return pickle.load(open(path, "rb"))
     elif path.endswith(".memmap"):

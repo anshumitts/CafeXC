@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import numpy as np
 
 
 class _Loss(torch.nn.Module):
@@ -167,11 +168,74 @@ class CustomMarginLoss(_Loss):
         sim_n = sim_n.unsqueeze(1).repeat_interleave(num_pos, dim=1)
 
         loss = F.relu(sim_n - sim_p + self.margin)
-        prob = sim_n / self.tau
-        prob[loss == 0] = self.mn_lim
-        prob = torch.softmax(prob, dim=1) #TODO Correct loss masking
+        prob = torch.softmax(sim_n/self.tau, dim=-1)
         loss = loss * prob
-        return self._reduce(loss.sum(dim=-1)).unsqueeze(0)
+        loss = self._reduce(loss)
+        return loss
 
     def extra_repr(self):
         return f"m={self.margin}, num_neg={self.num_neg}, num_pos={self.num_pos}"
+    
+
+class TripletMarginLossOHNM(_Loss):
+    r""" Triplet Margin Loss with Online Hard Negative Mining
+
+    * Applies loss using the hardest negative in the mini-batch
+    * Assumes diagonal entries are ground truth (for multi-class as of now)
+
+    Arguments:
+    ----------
+    reduction: string, optional (default='mean')
+        Specifies the reduction to apply to the output:
+        * 'none': no reduction will be applied
+        * 'mean' or 'sum': mean or sum of loss terms
+    margin: float, optional (default=0.8)
+        margin in triplet margin loss
+    k: int, optional (default=2)
+        compute loss only for top-k negatives in each row 
+    apply_softmax: boolean, optional (default=2)
+        promotes hard negatives using softmax
+    """
+
+    def __init__(self, margin=0.8, k=3, apply_softmax=True,
+                 tau=0.1, num_violators=False, reduction='mean'):
+        super(TripletMarginLossOHNM, self).__init__(reduction=reduction)
+        self.margin = margin
+        self.k = k
+        self.tau = tau
+        self.num_violators = num_violators
+        self.apply_softmax = apply_softmax
+
+    def forward(self, input, target, mask=None):
+        """
+        Arguments:
+        ---------
+        input: torch.FloatTensor
+            real number pred matrix of size: batch_size x output_size
+            cosine similarity b/w label and document
+        target:  torch.FloatTensor
+            0/1 ground truth matrix of size: batch_size x output_size
+        mask: torch.BoolTensor or None, optional (default=None)
+            ignore entries [won't contribute to loss] where mask value is False
+
+        Returns:
+        -------
+        loss: torch.FloatTensor
+            dimension is defined based on reduction
+        """
+        sim_p = torch.diagonal(input).view(-1, 1)
+        similarities = torch.where(target == 0, input, torch.full_like(input, -50))
+        _, indices = torch.topk(similarities, largest=True, dim=1, k=self.k)
+        sim_n = input.gather(1, indices)
+        loss = torch.max(torch.zeros_like(sim_p), sim_n - sim_p + self.margin)
+        if self.apply_softmax:
+            sim_n[loss == 0] = -50
+            prob = torch.softmax(sim_n/self.tau, dim=1)
+            loss = loss * prob
+        reduced_loss = self._reduce(loss)
+        if self.num_violators:
+            nnz = torch.sum((loss > 0), axis=1).float().mean()
+            return reduced_loss, nnz
+        else:
+            return reduced_loss
+

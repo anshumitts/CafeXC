@@ -2,10 +2,12 @@ import copy
 import torch
 import numpy as np
 import scipy.sparse as sp
-from xc.libs.dtypes import StrVector, Any, Union
 from torch.nn.parallel._functions import Scatter
 from functools import partial
+from typing import Any, Union, List, Tuple
 
+StrVector = List[str]
+TupleVector = List[Tuple[str, str]]
 
 def padded_inputs(smat, index_pad_value=0, mask_pad_value=0, return_bool=True):
     smat = smat.tolil()

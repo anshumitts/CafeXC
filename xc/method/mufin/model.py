@@ -1,5 +1,3 @@
-from .collate_fn import (SurrogateCollate, RankerCollate,
-                         SampleRankerCollate, DocumentCollate)
 from .dataset import (SiameseData, CrossAttention,
                       RankerPredictDataset, OnlyData,
                       GroupFts, FtsData)
@@ -45,9 +43,9 @@ class MufinModelBase(ModelBase):
         if len(tst_dset) == 0:
             return content
         bz = int(self.params.batch_size*self.params.bucket)
-        tst_dl = super().dataloader(tst_dset, mode, DocumentCollate,
-                                    batch_size=bz,
-                                    num_workers=self.params.num_workers)
+        tst_dl = super().dataloader(
+            tst_dset, mode, tst_dset.collate_fn,
+            batch_size=bz, num_workers=self.params.num_workers)
         self.net.eval()
         torch.cuda.empty_cache()
         self.net.to()
@@ -62,7 +60,7 @@ class MufinModelBase(ModelBase):
 
     def extract_modal(self, tst_dset):
         bz = int(self.params.batch_size*self.params.bucket)
-        tst_dl = super().dataloader(tst_dset, "test", DocumentCollate,
+        tst_dl = super().dataloader(tst_dset, "test", tst_dset.collate_fn,
                                     batch_size=bz,
                                     num_workers=self.params.num_workers)
         _type = "memmap" if os.environ['RESTRICTMEM'] == '1' else "npy"
@@ -106,10 +104,9 @@ class Mufin(MufinModelBase):
         self.net.eval()
         torch.cuda.empty_cache()
         self.net.to()
-        tst_dl = super().dataloader(tst_dset, "test", DocumentCollate,
+        tst_dl = super().dataloader(tst_dset, "test", tst_dset.collate_fn,
                                     batch_size=bz,
                                     num_workers=self.params.num_workers)
-
         def _out_emb(tst_dl):
             with torch.no_grad():
                 for batch in ut.pbar(tst_dl, desc="test", write_final=True):
@@ -185,10 +182,7 @@ class Mufin(MufinModelBase):
         self.save_anns(self.params.model_dir)
 
     def dataloader(self, doc_dset, mode):
-        collate_fn = DocumentCollate
-        if mode == "train":
-            collate_fn = SurrogateCollate
-        return super().dataloader(doc_dset, mode, collate_fn,
+        return super().dataloader(doc_dset, mode, doc_dset.collate_fn,
                                   shuffle=mode == "train",
                                   batch_size=self.params.batch_size,
                                   num_workers=self.params.num_workers)
@@ -313,33 +307,14 @@ class MufinRanker(MufinModelBase):
         super(MufinRanker, self).__init__(params, network, optimizer)
         self.anns = ANNSBox(num_labels=params.num_labels, top_k=params.top_k)
         self.fusion = Fusion(use_psp=True, A=params.A, B=params.B)
-    
-    def half_dataset(self, data_dir, doc_img, doc_txt, mode="docs"):
-        rand_k = int(os.environ["KEEP_TOP_K"])
-        feat = GroupFts(data_dir, doc_img, doc_txt, _type=mode, rand_k=rand_k,
-                        max_worker_thread=self.params.max_worker_thread,
-                        img_db=self.params.img_db)
-        txt_model = self.params.txt_model
-        img_model, f_name = None, None
-        if doc_txt is not None:
-            f_name = doc_txt.split("/")[-1].split(".")[0]
-        elif doc_img is not None:
-            f_name = doc_img.split("/")[-1].split(".")[0]
-        feat.build_pre_trained(txt_model, img_model, f_name, self.params)
-        return feat
 
     def dataloader(self, doc_dset, mode):
         batch_size = self.params.batch_size
-        collate_fn = RankerCollate
-        if mode == "get_docs":
-            collate_fn = DocumentCollate
-        elif mode == "predict":
-            batch_size = int(self.params.batch_size*self.params.bucket//2)
-        elif mode == "train":
-            if self.params.sampling:
-                collate_fn = SampleRankerCollate
-        return super().dataloader(doc_dset, mode, collate_fn, mode == "train",
-                                  batch_size, self.params.num_workers)
+        if mode == "predict":
+            batch_size = int(self.params.batch_size//2)
+        return super().dataloader(doc_dset, mode, doc_dset.collate_fn,
+                                  mode == "train", batch_size,
+                                  self.params.num_workers)
 
     def retrain(self, data_dir, trn_img, trn_txt, trn_lbl, lbl_img, lbl_txt):
         anns_dir = os.path.join(self.params.model_dir,
@@ -364,7 +339,7 @@ class MufinRanker(MufinModelBase):
         L = self.half_dataset(data_path, lbl_img, lbl_txt)
         S = self.load_ground_truth(shorty_dir, "test.npz", "shorty")
         Y = self.load_ground_truth(data_dir, None)
-        tst_dset = CrossAttention(X, L, Y, S)
+        tst_dset = CrossAttention(X, L, Y, S, 0, 0)
         self.load(self.params.model_dir, self.params.model_out_name)
         return self._predict(tst_dset)
 
@@ -474,14 +449,18 @@ class MufinRanker(MufinModelBase):
         Y_trn = self.load_ground_truth(data_dir, trn_lbl)
         S_trn = self.load_ground_truth(shorty_dir, "train.npz", "shorty")
         L = self.half_dataset(data_path, lbl_img, lbl_txt)
-        trn_dset = CrossAttention(X_trn, L, Y_trn, S_trn, mode="train")
+        trn_dset = CrossAttention(X_trn, L, Y_trn, S_trn,
+                                  num_pos, num_neg, mode="train")
 
         tst_dset = None
         if self.params.validate:
             X_tst = self.half_dataset(data_path, tst_img, tst_txt)
             Y_tst = self.load_ground_truth(data_dir, tst_lbl)
             S_tst = self.load_ground_truth(shorty_dir, "test.npz", "shorty")
-            tst_dset = CrossAttention(X_tst, L, Y_tst, S_tst)
+            num_pos = self.params.sample_pos
+            num_neg = self.params.sample_neg
+            tst_dset = CrossAttention(X_tst, L, Y_tst, S_tst,
+                                      num_pos, num_neg)
 
         if self.params.encoder_init is not None:
             print("Loading encoder")
