@@ -99,8 +99,8 @@ def aggregate(ind, ptr, dat):
 
 
 def ScoreEdges(graph, lbl_emb=None, doc_emb=None, batch_size=5000):
-    lbl_emb = normalize(lbl_emb)
-    doc_emb = normalize(doc_emb)
+    lbl_emb = normalize(np.nan_to_num(lbl_emb))
+    doc_emb = normalize(np.nan_to_num(doc_emb))
     g_lbls, g_docs = graph.nonzero()
     nnz = graph.nnz
     data = np.zeros(nnz)
@@ -112,7 +112,6 @@ def ScoreEdges(graph, lbl_emb=None, doc_emb=None, batch_size=5000):
         data[start:end] = 1.01 - _dist
 
     far_pos_cone = sp.csr_matrix((data, (g_lbls, g_docs)), shape=graph.shape)
-    csr_stats(far_pos_cone, "postive ranking")
     return far_pos_cone
 
 
