@@ -140,14 +140,14 @@ class SiameseDataLBLFirst(DatasetBase):
     def sample(self, idx, size=1):
         hpos = []
         if self.hard_pos:
-            c = self.pos_scoring[lidx]
+            c = self.pos_scoring[idx]
             i, p = c.indices, c.data / c.data.sum()
             hpos.append(choice(i, size=self.n_pos, p=p))
         hpos = np.asarray(hpos)
         return list(map(lambda x: choice(self.gt_rows[x].indices), idx)), idx, hpos
     
-    def hard_pos(self, idx):
-        return self.X.get_fts[hard_items]
+    def hard_pos_fts(self, idx):
+        return self.X.get_fts(idx)
     
     def collate_fn(self, _idx):
         d_batch = BatchData({})    
@@ -163,7 +163,7 @@ class SiameseDataLBLFirst(DatasetBase):
             shape = mask.shape
             hard_items, hard_index = np.unique(hp_idx, return_inverse=True)
             hard_index = hard_index.reshape(*shape)
-            d_batch["hard_pos"] = self.hard_pos(hard_items)
+            d_batch["hard_pos"] = self.hard_pos_fts(np.int32(hard_items))
             hard_index = torch.from_numpy(hard_index).type(torch.LongTensor)
             mask = torch.from_numpy(mask).type(torch.FloatTensor)
             d_batch["hard_pos_index"] = hard_index
@@ -197,13 +197,13 @@ class SiameseDataDOCFirst(SiameseDataLBLFirst):
                              params.min_splits, force_gpu=True)
         self.order = [self.valid_docs[x] for x in self.order]
     
-    def hard_pos(self, idx):
-        return self.L.get_fts[hard_items]
+    def hard_pos_fts(self, idx):
+        return self.L.get_fts(idx)
     
     def sample(self, idx, size=1):
         hpos = []
         if self.hard_pos:
-            c = self.pos_scoring[lidx]
+            c = self.pos_scoring[idx]
             i, p = c.indices, c.data / c.data.sum()
             hpos.append(choice(i, size=self.n_pos, p=p))
         hpos = np.asarray(hpos)

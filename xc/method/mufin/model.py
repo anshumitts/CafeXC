@@ -311,7 +311,7 @@ class MufinRanker(MufinModelBase):
     def dataloader(self, doc_dset, mode):
         batch_size = self.params.batch_size
         if mode == "predict":
-            batch_size = int(self.params.batch_size//2)
+            batch_size = batch_size//2
         return super().dataloader(doc_dset, mode, doc_dset.collate_fn,
                                   mode == "train", batch_size,
                                   self.params.num_workers)
@@ -449,6 +449,9 @@ class MufinRanker(MufinModelBase):
         Y_trn = self.load_ground_truth(data_dir, trn_lbl)
         S_trn = self.load_ground_truth(shorty_dir, "train.npz", "shorty")
         L = self.half_dataset(data_path, lbl_img, lbl_txt)
+        num_pos = self.params.sample_pos
+        num_neg = self.params.sample_neg
+           
         trn_dset = CrossAttention(X_trn, L, Y_trn, S_trn,
                                   num_pos, num_neg, mode="train")
 
@@ -457,8 +460,6 @@ class MufinRanker(MufinModelBase):
             X_tst = self.half_dataset(data_path, tst_img, tst_txt)
             Y_tst = self.load_ground_truth(data_dir, tst_lbl)
             S_tst = self.load_ground_truth(shorty_dir, "test.npz", "shorty")
-            num_pos = self.params.sample_pos
-            num_neg = self.params.sample_neg
             tst_dset = CrossAttention(X_tst, L, Y_tst, S_tst,
                                       num_pos, num_neg)
 
