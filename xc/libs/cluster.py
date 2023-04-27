@@ -1,3 +1,4 @@
+from xc.libs.fast_cluster import balanced_cluster, next_power_of_two
 from sklearn.preprocessing import normalize
 from multiprocessing import Pool
 import torch.nn.functional as F
@@ -8,7 +9,8 @@ import operator
 import torch
 import time
 import sys
-
+import gc
+import os
 
 def b_kmeans_dense_multi(fts_lbl, index, tol=1e-4):
     lbl_cent = normalize(np.squeeze(fts_lbl[:, 0, :]))
@@ -109,6 +111,7 @@ def b_kmeans_dense_gpu(labels_features, index, tol=1e-4, use_cuda=False):
         old_sim, new_sim = new_sim, s_l+s_r
     labels_features = labels_features.cpu()
     del labels_features
+    gc.collect()
     return list(map(lambda x: index[x], clustered_lbs))
 
 
@@ -139,16 +142,18 @@ def _normalize(mat):
         raise TypeError(f"{type(mat)} is not supported")
 
 
-def cluster(labels, max_leaf_size=None, min_splits=16, num_workers=5,
+def cluster(labels, max_leaf_size=None, min_splits=16, num_workers=4,
             return_smat=False, num_clusters=None, force_gpu=False):
     num_nodes = num_clusters
     if num_nodes is None:
         num_nodes = np.ceil(np.log2(labels.shape[0]/max_leaf_size))
-        num_nodes = 2**num_nodes
+        num_nodes = int(2**num_nodes)
     group = [np.arange(labels.shape[0])]
     labels = _normalize(labels)
     if force_gpu:
         labels = torch.from_numpy(labels).type(torch.FloatTensor)
+    else:
+        labels = np.array(labels, dtype=np.float32)
     splitter = get_functions(labels)
     min_singe_thread_split = min(min_splits, num_nodes)
     if min_singe_thread_split < 1:
@@ -189,3 +194,37 @@ def cluster(labels, max_leaf_size=None, min_splits=16, num_workers=5,
         group = group.tocsr()
     del labels
     return group
+
+
+def partial_cluster(
+    embs_bank: torch.Tensor,
+    min_leaf_sz: int,
+    num_random_clusters: int
+    ):
+    embs = embs_bank.copy()
+    tree_depth = int(np.ceil(np.log(embs.shape[0] / min_leaf_sz) / np.log(2)))
+    print(f"Updating clusters with size {min_leaf_sz}")
+    print(f"Tree depth = {tree_depth}")
+
+    GPUS = os.getenv("CUDA_VISIBLE_DEVICES").split(',')
+    
+    clustering_devices = [idx for idx, _ in enumerate(GPUS)]
+    num_random_clusters = (
+        num_random_clusters
+        if num_random_clusters != -1
+        else next_power_of_two(len(clustering_devices))
+    )
+    if num_random_clusters < len(clustering_devices):
+                print("num_random_clusters provided is less \
+                    than number of clustring devices which is not optimal")
+                
+    clusters = balanced_cluster(torch.HalfTensor(embs),
+                                tree_depth,
+                                clustering_devices,
+                                num_random_clusters,
+                                True)
+    
+    del embs
+    gc.collect()
+    
+    return clusters

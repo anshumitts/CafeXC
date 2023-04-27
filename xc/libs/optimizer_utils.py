@@ -1,7 +1,7 @@
 from transformers import (get_linear_schedule_with_warmup,
                           get_cosine_schedule_with_warmup)
 # (@anshumitts) NOTE: Changed optimzer to transformer from GRN
-from torch.optim import SparseAdam, AdamW
+from torch.optim import SparseAdam, AdamW, Adam
 from copy import deepcopy
 import torch.nn as nn
 import numpy as np
@@ -25,7 +25,7 @@ class Optimizer(object):
         if optim == 'Adam':
             if is_sparse == "sparse":
                 return SparseAdam(params)
-            return AdamW(params, weight_decay=0.0, eps=1e-6)
+            return Adam(params)
         elif optim == 'AdamW':
             if is_sparse == "sparse":
                 return SparseAdam(params)
@@ -95,7 +95,7 @@ class Optimizer(object):
 
                 if (np.intersect1d(p_name, self.special).size > 0
                         or isinstance(child, self.ignore)):
-                    _optim = self.optim
+                    _optim = "Adam"
 
                 if not (np.intersect1d(p_name, self.special).size > 0
                         or isinstance(child, self.ignore)):

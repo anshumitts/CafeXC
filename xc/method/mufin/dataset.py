@@ -220,6 +220,8 @@ class CrossAttention(DatasetBase):
         self.L = L
         self.p = num_p
         self.n = num_n
+        self.random_neg = num_n
+        self.num_lbs = self.gt.shape[1]
         self.setup()
 
     def split_dataset(self, arg):
@@ -244,13 +246,13 @@ class CrossAttention(DatasetBase):
     def gt(self):
         return self.Y.data
 
-    def get_samples(self, d_idx):
-        _sh = self.module2[d_idx]
-        _gt = self.gt[d_idx]
+    def get_samples(self, d_idx, yhat, gt):
+        _sh = yhat[d_idx]
+        _gt = gt[d_idx]
         pos = _gt.multiply(_sh)
         neg = _sh - pos
         _hard_neg = xs.retain_topk(neg, k=1)
-        _hard_neg.data[_hard_neg.data[:] < 0.95] = 0
+        _hard_neg.data[_hard_neg.data[:] < 0.99] = 0
         neg = neg - _hard_neg
         pos.eliminate_zeros()
         neg.eliminate_zeros()
@@ -315,37 +317,40 @@ class CrossAttention(DatasetBase):
         index = np.zeros((num_docs, self.n + self.p))
         masks = np.zeros((num_docs, self.n + self.p))
         for idx, (_p_i, _p_p, _n_i, _n_p) in enumerate(zip(p_i, p_p, n_i, n_p)):
-            _n_p = np.exp(np.array(_n_p))
-            _n_p /= _n_p.sum()
-            _n_i = choice(_n_i, size=self.n, p=_n_p)
-            items = _n_i.tolist()
+            items = choice(self.num_lbs, size=self.n + self.p)
+            if len(_n_p) > 0:
+                _n_p = np.exp(np.array(_n_p))
+                _n_p /= _n_p.sum()
+                _n_i = choice(_n_i, size=self.n)
+                items[:self.n] = _n_i.tolist()
+            if len(_p_p) > 0:
+                _p_p = np.exp(np.array(_p_p))
+                _p_p /= _p_p.sum()
+                _p_i = choice(_p_i, size=self.p)
+                items[-self.p:] = _p_i[:]
             
-            _p_p = np.exp(np.array(_p_p))
-            _p_p /= _p_p.sum()
-            _p_i = choice(_p_i, size=self.p, p=_p_p)
-            items.extend(_p_i.tolist())
-            masks[idx, :] = 1
-            index[idx, :] = items[:]
+            masks[idx, :len(items)] = 1
+            index[idx, :len(items)] = items[:]
             
         idx = np.arange(num_docs).reshape(-1, 1)
         index = torch.from_numpy(index).type(torch.LongTensor)
         masks = torch.from_numpy(masks).type(torch.FloatTensor)
         return index, masks
 
-    def split(self, d_idx, index):
+    def split(self, d_idx, index, X, L):
         content = BatchData({})
-        content["docs"] = self.X.get_fts(d_idx)
+        content["docs"] = X.get_fts(d_idx)
         content["index"] = index
         if self.num_splits == 1:
             l_idx, index = torch.unique(content["index"], return_inverse=True)
-            content["lbls"] = self.L.get_fts(l_idx)
+            content["lbls"] = L.get_fts(l_idx)
             content["index"] = index
             content["u_lbl"] = l_idx
             return content
         contents = []
         for args in scatter(content, self.num_splits):
             l_idx, index = torch.unique(args["index"], return_inverse=True)
-            args["lbls"] = self.L.get_fts(l_idx)
+            args["lbls"] = L.get_fts(l_idx)
             args["index"] = index
             args["u_lbl"] = l_idx
             contents.append(BatchData(args))
@@ -353,11 +358,11 @@ class CrossAttention(DatasetBase):
 
     def collate_fn(self, _idx):
         d_batch = BatchData({})
-        pos, neg, Y = self.get_samples(_idx)
+        pos, neg, Y = self.get_samples(_idx, self.module2, self.gt)
         d_batch["index"], d_batch["masks"] = self.random_select(pos, neg)
         _Y = np.take_along_axis(Y, d_batch["index"].numpy(), 1).todense()    
         d_batch["Y"] = torch.from_numpy(_Y).type(torch.FloatTensor)
-        d_batch["content"] = self.split(_idx, d_batch["index"])
+        d_batch["content"] = self.split(_idx, d_batch["index"], self.X, self.L)
         return d_batch
 
 

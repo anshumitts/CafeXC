@@ -157,9 +157,9 @@ class SEQDataset(TXTDataset):
             self.keep_valid(valid_pts)
 
     def __getitem__(self, idx):
-
+        idx = np.int32(idx)
         if not isinstance(idx, int):
-            sorted_idx = np.argsort(idx)
+            sorted_idx = np.int32(np.argsort(idx))
             idx = idx[sorted_idx]
             min_ind, max_ind = min(idx), max(idx)+1
             data = np.array(self.data[min_ind:max_ind][idx-min_ind])
@@ -235,7 +235,7 @@ class MEMTXTDataset(NPYTXTDataset):
     def __getitem__(self, idx):
 
         if not isinstance(idx, int):
-            sorted_idx = np.argsort(idx)
+            sorted_idx = np.int32(np.argsort(idx))
             idx = idx[sorted_idx]
 
         flags = self.data[idx]

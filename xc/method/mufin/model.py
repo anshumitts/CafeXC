@@ -228,7 +228,7 @@ class Mufin(MufinModelBase):
         for epoch in np.arange(0, ws):
             _ = self.step(trn_dl, epoch)
             if (epoch) % 10 == 0 and tst_dset is not None:
-                docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
+                docs, lbls = self.get_embs(trn_dset, True)
                 self.callback(docs, lbls, trn_dset.Y.data, epoch)
                 if self.params.not_use_module2:
                     score_mat = self._predict_shorty(
@@ -237,18 +237,19 @@ class Mufin(MufinModelBase):
                     score_mat = self._predict(tst_dset.X)
                 self.evaluate(score_mat, tst_dset.gt)
             self.save(self.params.model_dir, "model.pkl")
+        self.save(self.params.model_dir, "model-warmup.pkl")
         if ne - ws > 0:
-            docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
+            docs, lbls = self.get_embs(trn_dset, True)
             trn_dl.dataset.callback_(lbls, docs, self.params)
             trn_dl.b_size = self.params.batch_size
             print(f"Rocking up the model from {ws} to {ne} epochs")
         for epoch in np.arange(ws, ne):
             _ = self.step(trn_dl, epoch)
             if (epoch) % self.params.cl_update == 0:
-                docs, lbls = self.get_embs(trn_dset, self.params.hard_pos)
+                docs, lbls = self.get_embs(trn_dset, True)
                 self.callback(docs, lbls, trn_dset.Y.data, epoch)
                 trn_dl.dataset.callback_(lbls, docs, self.params)
-            if (epoch) % self.params.validate_after == 0:
+            if (epoch) % self.params.validate_after == 0 or (epoch) == self.params.num_epochs - 1:
                 if tst_dset is None:
                     pass
                 if self.params.not_use_module2:
@@ -338,8 +339,7 @@ class MufinRanker(MufinModelBase):
         X = self.half_dataset(data_path, tst_img, tst_txt)
         L = self.half_dataset(data_path, lbl_img, lbl_txt)
         S = self.load_ground_truth(shorty_dir, "test.npz", "shorty")
-        Y = self.load_ground_truth(data_dir, None)
-        tst_dset = CrossAttention(X, L, Y, S, 0, 0)
+        tst_dset = RankerPredictDataset(X, L, S.data)
         self.load(self.params.model_dir, self.params.model_out_name)
         return self._predict(tst_dset)
 
