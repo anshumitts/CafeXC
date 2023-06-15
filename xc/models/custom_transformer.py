@@ -9,7 +9,7 @@ def elu_feature_map(mat):
 
 
 class Residual(nn.Module):
-    def __init__(self, input_dims, dropout=0.1):
+    def __init__(self, input_dims, dropout=0.5):
         super(Residual, self).__init__()
         drop = nn.Dropout(p=dropout)
         activation = nn.GELU()

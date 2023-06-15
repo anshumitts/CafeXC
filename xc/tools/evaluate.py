@@ -37,8 +37,10 @@ def main(targets_label_file, train_label_file, result_dir, predictions_file, A, 
     acc = xc_metrics.Metrics(
         true_labels, inv_psp=inv_propen, remove_invalid=False)
     if mode == "m2":
+        print(targets_label_file, predictions_file)
         score_mat_dir = os.path.join(result_dir, f"{predictions_file}.npz")
         scr_mat = _remove_overlap(load_file(score_mat_dir).tolil(), docs, lbls)
+        print(scr_mat.shape, true_labels.shape)
         rec = xc_metrics.recall(scr_mat, true_labels, k=10)[-1]*100
         print("R@10=%0.2f" % (rec))
         args = acc.eval(scr_mat, 5)

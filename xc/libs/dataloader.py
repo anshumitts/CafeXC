@@ -13,7 +13,7 @@ class CustomSampler:
             yield x
 
     def __len__(self):
-        return len(self.dset.blocks(self.shuffle))
+        return len(self.dset)
 
 
 class XCDataLoader(torch.utils.data.DataLoader):

@@ -205,10 +205,8 @@ def partial_cluster(
     tree_depth = int(np.ceil(np.log(embs.shape[0] / min_leaf_sz) / np.log(2)))
     print(f"Updating clusters with size {min_leaf_sz}")
     print(f"Tree depth = {tree_depth}")
-
-    GPUS = os.getenv("CUDA_VISIBLE_DEVICES").split(',')
     
-    clustering_devices = [idx for idx, _ in enumerate(GPUS)]
+    clustering_devices = np.arange(len(os.getenv("CUDA_VISIBLE_DEVICES").split(',')))
     num_random_clusters = (
         num_random_clusters
         if num_random_clusters != -1

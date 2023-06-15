@@ -65,6 +65,9 @@ class LBLDataset(torch.utils.data.Dataset):
     def hstack(self, obj):
         self.data = sp.hstack([self.data, obj.data], 'csr')
     
+    def nonzero(self):
+        return self.data.nonzero()
+    
     def transpose(self):
         return LBLDataset("", self.data.transpose().tocsr())
     

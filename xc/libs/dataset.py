@@ -98,7 +98,7 @@ class GroupFts(DatasetBase):
     @property
     def pretrained_vect(self):
         IMG = self.IMG.pretrained_vect
-        TXT = self.IMG.pretrained_vect
+        TXT = self.TXT.pretrained_vect
         return IMG + TXT
 
     def vstack(self, obj):

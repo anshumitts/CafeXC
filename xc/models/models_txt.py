@@ -59,7 +59,8 @@ class BertTiny(TxtEncoderBase):
 class SentenceBert(TxtEncoderBase):
     def __init__(self, params):
         features = AutoModel.from_pretrained(
-            "sentence-transformers/msmarco-distilbert-base-v4")
+            "sentence-transformers/msmarco-distilbert-cos-v5")
+        # features = AutoModel.from_pretrained('sentence-transformers/msmarco-distilbert-base-v4')
         super().__init__(features, params.project_dim)
 
     @property

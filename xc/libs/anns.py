@@ -2,6 +2,7 @@ from xclib.utils.shortlist import ShortlistCentroids as shorty
 # from xclib.utils.shortlist import ShortlistInstances as shorty
 from .utils import map_one, pbar
 from .cluster import cluster
+from .dataparallel import DataParallel
 from xclib.utils import sparse as xs
 import torch.nn.functional as F
 import numba as nb
@@ -12,7 +13,43 @@ import tqdm
 import os
 
 
+class OvAModule(torch.nn.Module):
+    def __init__(self, lbl_emb, remapped=None):
+        super().__init__()
+        self.remapped = None
+        self.lbl_emb = None
+        if lbl_emb is not None:
+            lbl_emb = F.normalize(torch.from_numpy(lbl_emb)).T
+            lbl_emb = lbl_emb.type(torch.FloatTensor)
+            self.lbl_emb = torch.nn.Parameter(
+                lbl_emb, requires_grad=False)
+            if remapped is not None:
+                remapped = torch.from_numpy(remapped).type(torch.LongTensor)
+                self.remapped = torch.nn.Parameter(remapped, requires_grad=False)
+    
+    def forward(self, doc, K=5):
+        if self.lbl_emb is None:
+            return None, None
+        doc = F.normalize(doc)
+        scr, ind = torch.topk(doc.mm(self.lbl_emb), dim=1,
+                              k=min(K, self.lbl_emb.size(1)))
+        if self.remapped is not None:
+            ind = self.remapped[ind]
+        return scr, ind
+    
+    def extra_repr(self):
+        _str = ""
+        if self.lbl_emb is not None:
+            _str+= f"vect:{self.lbl_emb.shape}"
+        if self.remapped is not None:
+            _str+= f"remap:{self.remapped.size}"
+        return _str
+
+
 def get_sub_data(doc_vect, smat, label_idx):
+    if len(label_idx) == 0:
+        return None, None
+    
     if label_idx.size == smat.shape[0]:
         return doc_vect, smat
     _smat = smat[:, label_idx]
@@ -45,58 +82,68 @@ def map_neighbors(indices, similarity, top_k, pad_ind, pad_val):
     return point_labels, point_label_sims
 
 
-def query_anns(anns, vect, num_lbls, top_k=100, b_size=256, lbl_hash=None, desc="anns"):
-    s_lbls, s_scrs = [], []
-    for start in np.arange(0, len(vect), b_size):
-        end = min(start+b_size, len(vect))
-        lbls, distance = anns.query(vect[start:end])
-        s_lbls.append(lbls)
-        s_scrs.append(distance)
-    s_lbls, s_scrs = np.vstack(s_lbls).astype(np.int64), np.vstack(s_scrs)
-    s_lbls, s_scrs = map_neighbors(s_lbls, s_scrs, top_k, num_lbls, -1)
+def query_anns(anns, ova_module, docs, num_lbls, top_k=100, lbl_hash=None, desc="anns"):
+    lbls, distance = anns.query(docs)
     if lbl_hash is not None:
         lbl_hash = np.concatenate((lbl_hash, [num_lbls]))
-        s_lbls = lbl_hash[s_lbls]
-    smat = xs.csr_from_arrays(s_lbls, s_scrs, (len(vect), num_lbls+1))
+        lbls = lbl_hash[lbls]
+    
+    if ova_module is not None:
+        ova_dist, ova_lbls = ova_module(torch.from_numpy(docs))
+        ova_lbls = ova_lbls.cpu().numpy()
+        ova_dist = ova_dist.cpu().numpy()
+        lbls  = np.hstack([lbls, ova_lbls])
+        distance = np.hstack([distance, ova_dist])
+    smat = xs.csr_from_arrays(lbls, distance, (len(docs), num_lbls+1))
     return smat[:, :-1]
 
 
 class ANNSBox(object):
     def __init__(self, top_k: int = 100, num_labels: int = -1, M: int = 500,
-                 use_hnsw: bool = False, num_splits: int = 1, method: str = "hnsw"):
+                 use_hnsw: bool = False, method: str = "hnsw"):
         self.num_labels = num_labels
         self.top_k = top_k
         self.use_hnsw = use_hnsw
-        self.num_splits = num_splits
+        self.num_splits = 1
+        self.most_freq_items = []
         self.hnsw, self.mapd = {}, {}
-        for i in range(self.num_splits):
-            self.hnsw[f"part_{i}"] = shorty(method=method,
-                                            num_neighbours=top_k,
-                                            M=M)
-            self.mapd[f"part_{i}"] = []
-        self.docs = np.array([])
-        self.lbls_ncc = np.array([])
-        self.lbls_emb = np.array([])
+        self.M = M
+        self.method = method
+        self.lbls_emb = None
 
     def fit(self, docs_emb=None, lbls_emb=None, y_mat=None):
-        if docs_emb is not None:
-            self.lbls_ncc = y_mat.T.dot(docs_emb)
-            self.docs = docs_emb
-        self.lbls_emb = lbls_emb
+        if self.use_hnsw == False:
+            self.lbls_emb = DataParallel(OvAModule(lbls_emb))
+    
+    def cuda(self):
+        if self.lbls_emb is not None:
+            self.lbls_emb.cuda()
+    
+    def cpu(self):
+        if self.lbls_emb is not None:
+            self.lbls_emb.cpu()
+            self.lbls_emb.callback(clean=True)
 
-    def fit_anns(self, vect, smat, clusters=True):
+    def fit_anns(self, vect, smat, most_freq_items=[], num_splits=1):
         if self.use_hnsw:
+            self.most_freq_items = most_freq_items
+            _vect, _smat = get_sub_data(vect, smat, most_freq_items)
+            
+            if _vect is not None:
+                _vect = _smat.dot(_vect)
+            self.lbls_emb = OvAModule(_vect, most_freq_items)
+            self.lbls_emb = DataParallel(self.lbls_emb)
+            print(self.lbls_emb)
             n_lbls = smat.shape[1]
-            id_lbl = np.arange(n_lbls)
-            if clusters:
-                print("Clustering labels for ANNS")
-                id_lbl = cluster(smat.T.dot(
-                    vect), num_clusters=self.num_splits)
-            else:
-                if self.num_splits > 1:
-                    np.random.shuffle(id_lbl)
-                id_lbl = np.array_split(id_lbl, self.num_splits)
+            lbl_idx = np.arange(n_lbls)
+            
+            id_lbl = np.setdiff1d(lbl_idx, most_freq_items)
+            id_lbl = np.array_split(id_lbl, num_splits)
+            self.num_splits = len(id_lbl)
             for split in tqdm.tqdm(range(self.num_splits)):
+                self.hnsw[f"part_{split}"] = shorty(
+                    method=self.method, num_neighbours=3*self.M,
+                    M=self.M, efS=3*self.M, efC=3*self.M)
                 print(f"num_lbls = {id_lbl[split].size}")
                 _mapd = id_lbl[split]
                 _vect, _smat = get_sub_data(vect, smat, _mapd)
@@ -104,45 +151,30 @@ class ANNSBox(object):
                 self.hnsw[f"part_{split}"].fit(_vect, _smat)
                 self.mapd[f"part_{split}"] = _mapd
 
-    def __call__(self, docs, batch_size=512):
-        return self.brute_query(docs, batch_size)
+    def __call__(self, docs, batch_size=2048):
+        return self.brute_query(docs)
 
-    def hnsw_query(self, docs, batch_size):
+    def hnsw_query(self, docs):
         if self.use_hnsw:
-            smat = query_anns(self.hnsw[f"part_0"],
+            smat = query_anns(self.hnsw[f"part_0"], self.lbls_emb,
                               docs, self.num_labels,
-                              self.top_k, batch_size,
-                              self.mapd[f"part_0"])
+                              self.top_k, self.mapd[f"part_0"])
             for split in range(1, self.num_splits):
-                _smat = query_anns(self.hnsw[f"part_{split}"],
+                _smat = query_anns(self.hnsw[f"part_{split}"], None,
                                    docs, self.num_labels,
-                                   self.top_k, batch_size,
-                                   self.mapd[f"part_{split}"])
-                smat = _smat + smat
-                smat = xs.retain_topk(smat, self.top_k)
-                del _smat
+                                   self.top_k, self.mapd[f"part_{split}"])
+                smat = smat + _smat
             return smat
-        return self.brute_query(docs, batch_size)
+        return self.brute_query(docs)
 
-    def brute_query(self, docs, batch_size):
-        return self._exact_search(docs, self.lbls_emb, self.num_labels,
-                                  batch_size, self.top_k, "brute_emb")
+    def brute_query(self, docs):
+        return self._exact_search(docs, self.num_labels, self.top_k)
 
-    def _exact_search(self, docs, lbls, num_lbls,
-                      batch_size=512, topk=5, desc="desc"):
-        lbls = torch.from_numpy(lbls).type(torch.FloatTensor)
-        lbls = F.normalize(lbls, dim=-1).cuda().T
-        docs = torch.from_numpy(docs).type(torch.FloatTensor)
-        docs = F.normalize(docs, dim=-1).cuda()
-        scr, ind = torch.topk(docs.mm(lbls), dim=1, k=topk)
-        del lbls
+    def _exact_search(self, docs, num_lbls, topk=5):
+        scr, ind = self.lbls_emb(torch.from_numpy(docs), K=topk)
         return xs.csr_from_arrays(ind.cpu().numpy(), scr.cpu().numpy(),
                                   (docs.shape[0], num_lbls))
-
-    def gpu_ova(self, x, y, batch_size=512):
-        return self._exact_search(x, y, self.num_labels,
-                                  batch_size, self.top_k, "GPU_OVA")
-
+        
     def save(self, model_dir):
         if self.use_hnsw:
             for key in self.hnsw.keys():
@@ -152,16 +184,32 @@ class ANNSBox(object):
                 self.hnsw[key].save(path)
             path = os.path.join(model_dir, f"anns_m1_map.pkl")
             with open(path, "wb") as f:
+                self.mapd["most_freq_items"] = self.most_freq_items
                 pickle.dump(self.mapd, f)
+            
+            if self.lbls_emb is not None:
+                path = os.path.join(model_dir, f"ova_module.pkl")
+                torch.save(self.lbls_emb, path)
 
     def load(self, model_dir):
         if self.use_hnsw:
-            for key in self.hnsw.keys():
-                path = os.path.join(model_dir, f"{key}/anns_m1")
-                self.hnsw[key].load(path)
-                self.hnsw[key].index._set_query_time_params(efS=self.top_k)
-                self.hnsw[key].index.num_neighbours = self.top_k
-
             path = os.path.join(model_dir, f"anns_m1_map.pkl")
             with open(path, "rb") as f:
                 self.mapd = pickle.load(f)
+                self.most_freq_items = self.mapd["most_freq_items"]
+            self.num_splits = len(self.mapd.keys()) - 1
+            if len(self.most_freq_items) > 0:
+                path = os.path.join(model_dir, f"ova_module.pkl")
+                self.lbls_emb = torch.load(path)
+                print(self.lbls_emb)
+
+                
+            for split in range(self.num_splits):
+                key = f"part_{split}"
+                path = os.path.join(model_dir, f"{key}/anns_m1")
+                self.hnsw[key] = shorty(
+                    method=self.method, num_neighbours=3*self.M,
+                    M=self.M, efS=3*self.M, efC=3*self.M)
+                self.hnsw[key].load(path)
+                self.hnsw[key].index._set_query_time_params(efS=3*self.M)
+

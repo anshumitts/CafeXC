@@ -3,6 +3,7 @@ from .dataset import (SiameseData, CrossAttention,
                       GroupFts, FtsData)
 from xc.libs.model_base import (ModelBase, torch, np, sp, os)
 import xc.libs.utils as ut
+import torch.nn.functional as F
 from xc.libs.custom_dtypes import (padded_inputs, FeaturesAccumulator)
 from xc.models.models_fusion import Fusion
 from xc.libs.anns import ANNSBox
@@ -93,7 +94,8 @@ class Mufin(MufinModelBase):
     def __init__(self, params, network, optimizer):
         super(Mufin, self).__init__(
             params, network, optimizer)
-        self.anns = ANNSBox(num_labels=params.num_labels, top_k=params.top_k)
+        self.anns = ANNSBox(num_labels=params.num_labels,
+                            top_k=params.top_k, M=params.M)
         self.mz = self.params.min_leaf_sz
 
     def adjust_leaf_sz(self, bs, ce, ne):
@@ -104,6 +106,7 @@ class Mufin(MufinModelBase):
         self.net.eval()
         torch.cuda.empty_cache()
         self.net.to()
+        self.anns.cuda()
         tst_dl = super().dataloader(tst_dset, "test", tst_dset.collate_fn,
                                     batch_size=bz,
                                     num_workers=self.params.num_workers)
@@ -114,8 +117,9 @@ class Mufin(MufinModelBase):
                     yield doc.squeeze().cpu().numpy()
         scores = []
         for doc in _out_emb(tst_dl):
-            scores.append(self.anns.hnsw_query(doc, bz))
+            scores.append(self.anns.hnsw_query(doc))
             del doc
+        self.anns.cpu()
         return sp.vstack(scores, format='csr')
 
     def predict(self, data_dir, tst_img, tst_txt, tst_lbl, lbl_img, lbl_txt):
@@ -194,8 +198,8 @@ class Mufin(MufinModelBase):
                                 self.params.encoder_init)
             self.net.init_encoder(init)
         self.anns.use_hnsw = True
-        X = self.half_dataset(data_dir, trn_img, trn_txt)
         L = self.half_dataset(data_dir, lbl_img, lbl_txt)
+        print(data_dir, trn_lbl)
         Y = self.load_ground_truth(data_dir, trn_lbl)
 
         docs, lbls = ut.load_overlap(self.params.data_dir,
@@ -206,16 +210,10 @@ class Mufin(MufinModelBase):
         self.filter.fit(docs, lbls, ymat)
         print("Extracting items")
         data = self.extract_item(L, "lbls")
-        docs = self.extract_item(X, "docs")
-        docs.remap(Y.data.T)
-        data = data.hstack(docs)
-        self.net.item_encoder.module.module = 3
-        str_embs = super().extract_modal(L)
-        for key in str_embs.keys():
-            if str_embs[key].data is None:
-                continue
-            data = data.hstack(str_embs[key])
-        self.anns.fit_anns(data.data, data.smat.T)
+        label_freq = np.ravel(ymat.getnnz(axis=0))
+        repeat_labels = np.where(label_freq >= self.params.doc_thresh)[0]
+        print("Repeat this many labels", repeat_labels.size)
+        self.anns.fit_anns(data.data, data.smat.T, repeat_labels, self.params.n_split)
         self.save_anns(self.params.model_dir)
         self.save(self.params.model_dir, "model.pkl")
 
@@ -237,7 +235,8 @@ class Mufin(MufinModelBase):
                     score_mat = self._predict(tst_dset.X)
                 self.evaluate(score_mat, tst_dset.gt)
             self.save(self.params.model_dir, "model.pkl")
-        self.save(self.params.model_dir, "model-warmup.pkl")
+        print("Saving warmed up model")
+        self.save(self.params.model_dir, "model-warm.pkl")
         if ne - ws > 0:
             docs, lbls = self.get_embs(trn_dset, True)
             trn_dl.dataset.callback_(lbls, docs, self.params)
@@ -249,7 +248,7 @@ class Mufin(MufinModelBase):
                 docs, lbls = self.get_embs(trn_dset, True)
                 self.callback(docs, lbls, trn_dset.Y.data, epoch)
                 trn_dl.dataset.callback_(lbls, docs, self.params)
-            if (epoch) % self.params.validate_after == 0 or (epoch) == self.params.num_epochs - 1:
+            if (epoch) % self.params.validate_after == 0:
                 if tst_dset is None:
                     pass
                 if self.params.not_use_module2:
@@ -347,15 +346,13 @@ class MufinRanker(MufinModelBase):
         self.net.cpu()
         torch.cuda.empty_cache()
         num_lbls, cached = self.params.num_labels, True
-        if os.environ['RESTRICTMEM'] == '1':
-            temp_dset, cached = tst_dset, False
-        else:
-            if X is None:
-                X = self.extract_item(tst_dset.X, "docs", "get_docs")
-            if L is None:
-                L = self.extract_item(tst_dset.L, "lbls", "get_docs")
-            shorty = tst_dset.module2
-            temp_dset = RankerPredictDataset(X, L, shorty)
+        
+        if X is None:
+            X = self.extract_item(tst_dset.X, "docs", "get_docs")
+        if L is None:
+            L = self.extract_item(tst_dset.L, "lbls", "get_docs")
+        shorty = tst_dset.module2
+        temp_dset = RankerPredictDataset(X, L, shorty)
 
         temp_dset = self.dataloader(temp_dset, "predict")
         self.net.preset_weights(L.mean_pooled.cpu())

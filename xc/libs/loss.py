@@ -175,7 +175,7 @@ class CustomMarginLoss(_Loss):
 
     def extra_repr(self):
         return f"m={self.margin}, num_neg={self.num_neg}, num_pos={self.num_pos}"
-    
+
 
 class TripletMarginLossOHNM(_Loss):
     r""" Triplet Margin Loss with Online Hard Negative Mining
@@ -223,8 +223,9 @@ class TripletMarginLossOHNM(_Loss):
         loss: torch.FloatTensor
             dimension is defined based on reduction
         """
+        target = target.to(input.device)
         sim_p = torch.diagonal(input).view(-1, 1)
-        similarities = torch.where(target == 0, input, torch.full_like(input, -50))
+        similarities = torch.where(target == 0, input, torch.full_like(input, -10))
         _, indices = torch.topk(similarities, largest=True, dim=1, k=self.k)
         sim_n = input.gather(1, indices)
         loss = torch.max(torch.zeros_like(sim_p), sim_n - sim_p + self.margin)
@@ -232,7 +233,7 @@ class TripletMarginLossOHNM(_Loss):
             sim_n[loss == 0] = -50
             prob = torch.softmax(sim_n/self.tau, dim=1)
             loss = loss * prob
-        reduced_loss = self._reduce(loss)
+        reduced_loss = self._reduce(loss)*self.k
         if self.num_violators:
             nnz = torch.sum((loss > 0), axis=1).float().mean()
             return reduced_loss, nnz

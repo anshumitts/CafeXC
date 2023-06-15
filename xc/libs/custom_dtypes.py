@@ -6,6 +6,7 @@ from torch.nn.parallel._functions import Scatter
 from functools import partial
 from typing import Any, Union, List, Tuple
 
+
 StrVector = List[str]
 TupleVector = List[Tuple[str, str]]
 
@@ -136,7 +137,7 @@ class DataParallelList(object):
         return self
 
     def to(self, device, **kwargs):
-        self.device = torch.device(f"cuda:{device}")
+        self.device = device
         for idx in range(len(self)):
             data = self[idx]
             if torch.is_tensor(data) or isinstance(data, __CUSTOM_DATA__):
@@ -187,6 +188,22 @@ class BatchData(object):
 
     def update(self, items):
         self.data.update(items)
+        
+    def vstack(self, obj, *args, **kwargs):
+        assert self == obj, "Items are not same"
+        data = {}
+        for key in self.keys():
+            if self.data[key] is not None:
+                data[key] = self.data[key].vstack(obj[key], *args, **kwargs)
+        return BatchData(data)
+                
+        
+    def __eq__(self, obj):
+        item = type(obj) == type(self)
+        if np.setdiff1d(list(self.keys()), list(obj.keys())).size == 0:
+            item = item and True
+        return item
+            
 
     def __getitem__(self, key: str):
         try:
@@ -221,7 +238,7 @@ class BatchData(object):
         return content.cpu()
 
     def to(self, device=None, non_blocking=False):
-        self.device = torch.device(f"cuda:{device}")
+        self.device = device
         return self.recrusive(self, self.action_to, device=device,
                               non_blocking=non_blocking)
 
@@ -281,10 +298,6 @@ class MultiViewData(object):
         self.len = self.data["smat"]['mask'].size(0)
 
     def __getitem__(self, idx):
-        if not isinstance(idx, (int, torch.Tensor)) \
-                or isinstance(idx, slice) or len(idx.shape) > 2:
-            raise NotImplementedError(f"{type(idx)}: {idx} is not implemented")
-
         mask = self.data["smat"]["mask"][idx]
         indx = self.data["smat"]["index"][idx]
         vect = None
@@ -307,7 +320,7 @@ class MultiViewData(object):
         return vect
 
     def to(self, device=0, **kwargs):
-        self.device = torch.device(f"cuda:{device}")
+        self.device = device
         self.data.to(device, **kwargs)
         return self
 
@@ -357,6 +370,39 @@ class MultiViewData(object):
         _str += f" I: {self.index.shape}"
         _str += f" V: {self.vect.shape}"
         return _str
+    
+    def __eq__(self, obj):
+        if_vect_match = self._valid_vect == obj._valid_vect
+        if_smat_match = type(self.data["smat"]) == type(obj.data["smat"])
+        return if_vect_match and if_smat_match
+    
+    def vstack(self, obj, inplace=True):
+        assert self == obj, "objects does contain same information"
+        ob1_h, ob1_w = self.data["smat"]["index"].shape
+        ob2_h, ob2_w = obj.data["smat"]["index"].shape
+        
+        full_data =  ob1_h + ob2_h 
+        max_width = max(ob1_w, ob2_w)
+        index_data = torch.zeros((full_data, max_width)).type(torch.LongTensor)
+        index_data[:ob1_h, :ob1_w] = self.data["smat"]["index"]
+        index_data[ob1_h:, :ob2_w] = obj.data["smat"]["index"] 
+        
+        mask_data = torch.zeros((full_data, max_width)).type(torch.FloatTensor)
+        mask_data[:ob1_h, :ob1_w] = self.data["smat"]["mask"]
+        mask_data[ob1_h:, :ob2_w] = obj.data["smat"]["mask"] 
+        vect_data = None
+        if self._valid_vect:
+            vect_data = torch.cat([self.data["vect"], obj.data["vect"]])
+            index_data[ob1_h:, :] = index_data[ob1_h:, :] + ob1_h
+        del obj
+        if inplace:
+            self.data["vect"] = vect_data
+            self.data["smat"]["index"] = index_data
+            self.data["smat"]["mask"] = mask_data
+            return self
+        return MultiViewData(BatchData({"index": index_data, "mask": mask_data}),
+                             vect_data, self.dtype, self.pad_len)
+
 
 
 class FeaturesAccumulator(object):
@@ -402,7 +448,6 @@ class FeaturesAccumulator(object):
             smat[rows, cols] = 1
             self._smat = smat.tocsr()
         else:
-            print("Empty array found")
             self._data = None
             self._smat = None
         del self.rows, self.cols

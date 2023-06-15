@@ -94,25 +94,45 @@ def _random_walk(q_rng, q_lbl, l_rng, l_qry, walk_to,
         if l_start - l_end == 0:
             continue
         _qidx = np.random.choice(l_qry[l_start: l_end])
-        for walk in np.arange(0, walk_to):
+        
+        q_start, q_end = q_rng[_qidx], q_rng[_qidx+1]
+        _lidx = np.random.choice(q_lbl[q_start: q_end])
+        _idx = _lidx
+        if hops_per_step == 3:
+            l_start, l_end = l_rng[_lidx], l_rng[_lidx+1]
+            if l_start - l_end == 0:
+                l_start, l_end = l_rng[lbl_k], l_rng[lbl_k+1]
+            _qidx = np.random.choice(l_qry[l_start: l_end])
+            _idx = _qidx
+            q_start, q_end = q_rng[_qidx], q_rng[_qidx+1]
+            _lidx = np.random.choice(q_lbl[q_start: q_end])
+            
+        
+        nbr_idx[idx, 0] = _idx
+        nbr_dat[idx, 0] = 1
+
+        for walk in np.arange(1, walk_to):
             p = np.random.random()
             if p < p_reset:
-                l_start, l_end = l_rng[lbl_k], l_rng[lbl_k+1]
-                _qidx = np.random.choice(l_qry[l_start: l_end])
-            else:
-                if hops_per_step == 2:
-                    _lidx = nbr_idx[idx, walk-1]
-                    l_start, l_end = l_rng[_lidx], l_rng[_lidx+1]
-                    _qidx = np.random.choice(l_qry[l_start: l_end])
-                if hops_per_step == 3:
-                    _qidx = nbr_idx[idx, walk-1]
+                _lidx = lbl_k
 
+            l_start, l_end = l_rng[_lidx], l_rng[_lidx+1]
+            if l_start - l_end == 0:
+                _lidx = lbl_k
+                l_start, l_end = l_rng[_lidx], l_rng[_lidx+1]
+            
+            _qidx = np.random.choice(l_qry[l_start: l_end])
             q_start, q_end = q_rng[_qidx], q_rng[_qidx+1]
-            _idx = np.random.choice(q_lbl[q_start: q_end])
-
+            _lidx = np.random.choice(q_lbl[q_start: q_end])
+            _idx = _lidx
             if hops_per_step == 3:
-                l_start, l_end = l_rng[_idx], l_rng[_idx+1]
-                _idx = np.random.choice(l_qry[l_start: l_end])
+                l_start, l_end = l_rng[_lidx], l_rng[_lidx+1]
+                if l_start - l_end == 0:
+                    l_start, l_end = l_rng[lbl_k], l_rng[lbl_k+1]
+                _qidx = np.random.choice(l_qry[l_start: l_end])
+                _idx = _qidx
+                q_start, q_end = q_rng[_qidx], q_rng[_qidx+1]
+                _lidx = np.random.choice(q_lbl[q_start: q_end])
 
             nbr_idx[idx, walk] = _idx
             nbr_dat[idx, walk] = 1

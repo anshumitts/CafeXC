@@ -123,6 +123,9 @@ class XAttn(CLFEmbeddings):
         self.__preset__ = self.norm(xml_vect + lbl_vect, dim=-1)
         self.__preset__ = self.__preset__.detach()
         return self.__preset__
+    
+    def set_params(self, init):
+        self.features.weight.data.copy_(init)
 
 
 class XAttnv(CLFBase):

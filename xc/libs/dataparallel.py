@@ -32,6 +32,7 @@ def parameters(self, recurse=True):
 class DataParallel(torch.nn.DataParallel):
     def __init__(self, module):
         super().__init__(module)
+        self._replicas = None
         
     def callback(self, clean=False):
         self._replicas = None

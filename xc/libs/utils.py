@@ -43,14 +43,11 @@ def bin_index(array, item):  # Binary search
     return -1
 
 
-def fasterTxtRead(file, chunk=100000, encoding="latin1"):
+def fasterTxtRead(file, encoding="latin1", dlim="->"):
     with open(file, "r", encoding=encoding) as file:
         data = []
-        while True:
-            lines = file.readlines(chunk)
-            if not lines:
-                break
-            data.extend(lines)
+        for line in pbar(file, desc="Reading"):
+            data.append(line.split(dlim, 1)[1].strip())
     return data
 
 
@@ -129,12 +126,8 @@ def load_file(path):
     elif path.endswith(".memmap"):
         with open(path+".meta", "r") as f:
             elements = f.readline().strip().split(",")
-        if elements[0] not in ["int32", "int64", "float32", "float64"]:
-            dtype = "float32"
-            shape = tuple(map(int, elements))
-        else:
-            dtype = elements[0]
-            shape = tuple(map(int, elements[1:]))
+        dtype = elements[0]
+        shape = tuple(map(int, elements[1:]))
         return np.memmap(path+".dat", dtype=dtype, mode="r", shape=shape)
     else:
         raise TypeError(f"{path} is not supported!!")

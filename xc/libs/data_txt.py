@@ -1,5 +1,5 @@
 from .custom_dtypes import MultiViewData, BatchData, padded_inputs
-from xc.tools.tokenize_text import setup_tokenizer, tokens
+from xc.tools.tokenize_text import setup_tokenizer, tokens, tokenize_corpus
 from sklearn.preprocessing import normalize
 from .utils import load_file, fasterTxtRead
 from xc.libs.custom_dtypes import save
@@ -11,6 +11,7 @@ import torch
 import glob
 import os
 
+
 def load_txt(root, n_file):
     read_full = os.environ['RESTRICTMEM'] == '0'
     print(f"TXT:{n_file}(read_full={read_full})")
@@ -18,7 +19,7 @@ def load_txt(root, n_file):
         return TXTDataset(root, n_file)
     elif n_file.endswith("txt"):
         return RAWDataset(root, n_file)
-    elif n_file.endswith("seq.memmap"):
+    elif n_file.endswith("seq.memmap") or n_file.endswith("seq.npy"):
         return SEQDataset(root, n_file)
     elif n_file.endswith("pretrained"):
         if os.environ['RESTRICTMEM'] == '1':
@@ -63,7 +64,6 @@ class TXTDataset(NullDataset):
     def padd(self):
         self.data = sp.hstack([self.data,
                                sp.lil_matrix(len(self), 1)]).tocsr()
-        print("Adding padding index in the last")
 
     def get_fts(self, idx, _desc):
         return padded_inputs(self[idx])
@@ -85,13 +85,15 @@ class TXTDataset(NullDataset):
 
 class RAWDataset(TXTDataset):
     def __init__(self, root, n_file):
-        self.data = fasterTxtRead(os.path.join(root, f"{n_file}"))
-        self.data = list(map(lambda x: x.strip().replace("_", " "), self.data))
-        if len(self.data[0].split('->', 1)) == 2:
-            self.data = list(map(lambda x: x.split('->', 1)[1], self.data))    
+        self.data = os.path.join(root, f"{n_file}")
         self.tokenizer = None
         self.max_len = None
         self._type = "txt"
+    
+    @property
+    def shape(self):
+        return (len(self.data), self.max_len)
+        
 
     def __len__(self):
         return len(self.data)
@@ -115,27 +117,31 @@ class RAWDataset(TXTDataset):
         return MultiViewData(BatchData({"mask": mask, "index": index}))
 
     def build_pre_trained(self, txt_model, data_dir, file_name,
-                          params, prefix="txt.seq.memmap", thresh=5e6):
+                          params, prefix="txt.seq.memmap",
+                          thresh=5e9, accelerator=None):
         self.max_len = params.max_len
         self.tokenizer = setup_tokenizer(txt_model)
-        if len(self.data) > thresh:
-            return self
         file_name = f"{file_name}.{prefix}"
         cached_path = os.path.join(data_dir, txt_model)
-        print(f"{cached_path}/{file_name}")
         if len(glob.glob(f"{cached_path}/{file_name}*")) > 0:
             return load_txt(cached_path, file_name)
-        input_idx, attention = tokens(self.data, self.tokenizer, self.max_len)
-        _tokens = np.stack([input_idx, attention], axis=1)
+        self.data = fasterTxtRead(self.data)
+        print(f"{cached_path}/{file_name}")
+        input_idx, attention = tokenize_corpus(self.data, self.tokenizer, self.max_len)
+        _tokens = np.hstack([input_idx, attention])
         os.makedirs(cached_path, exist_ok=True)
         save(f"{cached_path}/{file_name}", "memmap", _tokens)
         del _tokens
         return load_txt(cached_path, file_name)
+    
+    def vstack(self, objt):
+        self.data.extend(objt.data)
 
 
 class SEQDataset(TXTDataset):
     def __init__(self, root, n_file):
         self.data = load_file(os.path.join(root, f"{n_file}"))
+        # self.data = np.array(self.data[:])
         self._type = "seq"
     
     @property
@@ -144,11 +150,11 @@ class SEQDataset(TXTDataset):
 
     @property
     def valid(self):
-        return np.where(np.ravel(np.sum(self.data[:, 1, :], axis=-1)) > 0)[0]
+        return np.arange(self.data.shape[1])
 
     @property
     def num_features(self):
-        return np.max(self.data[:, 0, :])
+        return np.max(self.data)
 
     def filter(self, valid_pts, axis=0):
         if axis == 1:
@@ -158,22 +164,14 @@ class SEQDataset(TXTDataset):
 
     def __getitem__(self, idx):
         idx = np.int32(idx)
-        if not isinstance(idx, int):
-            sorted_idx = np.int32(np.argsort(idx))
-            idx = idx[sorted_idx]
-            min_ind, max_ind = min(idx), max(idx)+1
-            data = np.array(self.data[min_ind:max_ind][idx-min_ind])
-            data[sorted_idx] = data.copy()
-        else:
-            data = self.data[idx]
-
-        return data
+        return self.data[idx]
 
     def get_fts(self, idx, _desc):
         data = self[idx]
-        data = torch.from_numpy(data).type(torch.LongTensor)
-        index = data[:, 0, :].squeeze()
-        mask = data[:, 1, :].squeeze()
+        data = torch.from_numpy(np.int64(data)).type(torch.LongTensor)
+        length = data.shape[1]
+        index = data[:, :length//2]
+        mask = data[:, length//2:]
         max_seq = mask.sum(dim=1).max()
         index, mask = index[:, :max_seq], mask[:, :max_seq]
         return MultiViewData(BatchData({"mask": mask, "index": index}))
@@ -231,19 +229,3 @@ class MEMTXTDataset(NPYTXTDataset):
         self._type = "pretrained"
         if read_full:
             self.vect = np.array(self.vect[:])
-
-    def __getitem__(self, idx):
-
-        if not isinstance(idx, int):
-            sorted_idx = np.int32(np.argsort(idx))
-            idx = idx[sorted_idx]
-
-        flags = self.data[idx]
-        ind = np.unique(flags.indices)
-        min_ind, max_ind = min(ind), max(ind) + 1
-        flags = flags.tocsc()[:, ind]
-        txts = self.vect[min_ind:max_ind][ind-min_ind]
-        if not isinstance(idx, int):
-            flags = flags.tolil()
-            flags[sorted_idx] = flags.copy()
-        return MultiViewData(flags.tocsr(), txts)

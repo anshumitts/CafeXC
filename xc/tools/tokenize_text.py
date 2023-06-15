@@ -1,10 +1,10 @@
-from transformers import (AutoTokenizer, CLIPTokenizer,
-                          DistilBertTokenizerFast)
+from transformers import (AutoTokenizer, CLIPTokenizer)
 from tokenizers.processors import TemplateProcessing
 from tokenizers import BertWordPieceTokenizer
 from xc.libs.utils import pbar, load_file
 from xc.libs.custom_dtypes import save
 import scipy.sparse as sp
+from tqdm import tqdm
 import numpy as np
 import argparse
 import tempfile
@@ -12,11 +12,30 @@ import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
 
-def tokens(text, _tokenizer, max_len):
-    text = _tokenizer(text, truncation=True, padding='max_length',
-                      max_length=max_len, add_special_tokens=True,
-                      return_tensors="pt", return_length=True)
-    return np.int32(text.input_ids), np.int32(text.attention_mask)
+def tokens(text, _tokenizer, max_len, batch_size=1024):
+    text = _tokenizer.batch_encode_plus(
+              text, truncation=True, padding='max_length',
+              max_length=max_len, add_special_tokens=True,
+              return_tensors="np", return_length=True)
+    return text["input_ids"], text["attention_mask"]
+
+
+def tokenize_corpus(text, _tokenizer, max_len, batch_size=32):
+    num_items = len(text)
+    indices, masks = [], []
+    for start in tqdm(np.arange(0, num_items, batch_size)):
+        end = min(start + batch_size, num_items)
+        temp = _tokenizer.batch_encode_plus(
+                  text[start:end], truncation=True, padding='max_length',
+                  max_length=max_len, add_special_tokens=True,
+                  return_tensors="np", return_length=True)
+        
+        indices.append(np.uint16(temp["input_ids"]))
+        masks.append(np.uint16(temp["attention_mask"]))
+        del temp
+    indices = np.vstack(indices)
+    masks = np.vstack(masks)
+    return indices, masks
 
 
 def to_sparse(index, mask, max_vocab):
@@ -55,7 +74,7 @@ def build_vocab(args):
     raw_data = tempfile.NamedTemporaryFile(mode="w+")
     with open(args.trn_map, "r", encoding="latin1") as fp:
         for line in pbar(fp, desc=args.trn_map):
-            line = line.strip().split("->", 1)[1]
+            line = line.split("->", 1)[1].strip()
             raw_data.write(f"{line}\n")
 
     with open(args.lbl_map, "r", encoding="latin1") as fp:
@@ -93,9 +112,8 @@ def setup_tokenizer(txt_model):
         _tokenizer = AutoTokenizer.from_pretrained(
             f"prajjwal1/{txt_model}", do_lower_case=True)
     elif txt_model in ["sentencebert"]:
-        print("Using sentence bert")
-        _tokenizer = DistilBertTokenizerFast.from_pretrained(
-            "sentence-transformers/msmarco-distilbert-base-v4",
+        _tokenizer = AutoTokenizer.from_pretrained(
+            "sentence-transformers/msmarco-distilbert-cos-v5",
             do_lower_case=True)
     else:
         _tokenizer = AutoTokenizer.from_pretrained(
@@ -111,7 +129,7 @@ def tokenize(text_map, text_xf, _tokenizer, args):
         print(f"File {text_map} not found!!")
         return
     path = os.path.join(args.raw_dir, text_map)
-    text = list(map(lambda x: x.strip().split("->", 1)[1].replace("_", " ").lower(),
+    text = list(map(lambda x: x.split("->", 1)[1].strip().replace("_", " ").lower(),
                     pbar(open(path, "r", encoding="latin1"), desc=text_map)))
     input_idx, attention = tokens(text, _tokenizer, args.max_len)
     max_vocab = _tokenizer.vocab_size

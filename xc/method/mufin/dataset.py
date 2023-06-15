@@ -1,8 +1,8 @@
 from xc.libs.dataset import *
 from xc.libs.custom_dtypes import BatchData, DataParallelList, scatter, padded_inputs, pre_split
 from xc.libs.utils import ScoreEdges, normalize, pbar
+from xc.libs.cluster import partial_cluster, cluster
 from torch.utils.data import Dataset
-from xc.libs.cluster import cluster
 import xclib.utils.sparse as xs
 import scipy.sparse as sp
 import numpy as np
@@ -77,8 +77,6 @@ class SiameseDataLBLFirst(DatasetBase):
         self.Y = Y
         self.L = L
         self.X = X
-        self.doc_gph = None
-        self.lbl_gph = None
         self.setup()
         self.hard_pos = False
         self.n_pos = multi_pos
@@ -92,9 +90,9 @@ class SiameseDataLBLFirst(DatasetBase):
         self.setup()
 
     def setup(self):
-        self.valid_lbls = self.Y.valid_lbls
+        self.valid_items = self.Y.valid_lbls
         self.gt_rows = self.gt.T.tocsr()
-        self.order = self.valid_lbls.reshape(-1, 1)
+        self.order = self.valid_items.reshape(-1, 1)
         self.shortlist = None
 
     def __getitem__(self, lidx):
@@ -109,29 +107,26 @@ class SiameseDataLBLFirst(DatasetBase):
         return BatchData({"docs": docs, "lbls": lbls})
 
     def __len__(self):
-        return len(self.X)
+        return len(self.valid_items)
 
     def callback_(self, lbl_xf=None, doc_xf=None, params=None):
         self.hard_pos = params.hard_pos
         if self.hard_pos:
-            self.pos_scoring = self.gt_rows
-            self.pos_scoring = ScoreEdges(self.gt_rows, lbl_xf, doc_xf,
+            self.pos_scoring = ScoreEdges(self.gt_rows.data,
+                                          lbl_xf, doc_xf,
                                           params.batch_size)
-        lbl_xf = lbl_xf[self.valid_lbls]
-        self.order = cluster(lbl_xf, params.min_leaf_sz,
-                             params.min_splits, force_gpu=True)
-        self.order = [self.valid_lbls[x] for x in self.order]
+        lbl_xf = lbl_xf[self.valid_items]
+        order = partial_cluster(lbl_xf, params.min_leaf_sz,
+                                torch.cuda.device_count())
+        self.order = [self.valid_items[x] for x in order]
 
     def blocks(self, shuffle=False):
         # NOTE Assuming lbls are always sorted
         if shuffle:
-            idx = np.arange(len(self.order))
-            np.random.shuffle(idx)
-            lbls = list(map(lambda x: self.order[x], idx))
-            lbls = np.concatenate(lbls).flatten()
-        else:
-            lbls = np.concatenate(self.order)
-        return lbls
+            np.random.shuffle(self.order)
+        if isinstance(self.order, list):
+            return np.concatenate(self.order).flatten()
+        return self.order
 
     @property
     def type_dict(self):
@@ -177,37 +172,23 @@ class SiameseDataLBLFirst(DatasetBase):
 class SiameseDataDOCFirst(SiameseDataLBLFirst):
 
     def setup(self):
-        self.valid_docs = self.Y.transpose().valid_lbls
-        self.gt_rows = self.gt
-        self.order = self.valid_docs.reshape(-1, 1)
+        self.valid_items = self.Y.transpose().valid_lbls
+        self.gt_rows = self.Y
+        self.order = np.ravel(self.valid_items)
         self.shortlist = None
 
+    def callback_(self, lbl_xf=None, doc_xf=None, params=None):
+        super().callback_(doc_xf, lbl_xf, params)
+    
     def get_gt(self, d_idx, l_idx):
         return self.gt_rows[d_idx].tocsc()[:, l_idx].todense()
-
-
-    def callback_(self, lbl_xf=None, doc_xf=None, params=None):
-        self.hard_pos = params.hard_pos
-        if self.hard_pos:
-            self.pos_scoring = self.gt_rows
-            self.pos_scoring = ScoreEdges(self.gt_rows, doc_xf, lbl_xf,
-                                          params.batch_size)
-        doc_xf = doc_xf[self.valid_docs]
-        self.order = cluster(doc_xf, params.min_leaf_sz,
-                             params.min_splits, force_gpu=True)
-        self.order = [self.valid_docs[x] for x in self.order]
     
     def hard_pos_fts(self, idx):
         return self.L.get_fts(idx)
     
     def sample(self, idx, size=1):
-        hpos = []
-        if self.hard_pos:
-            c = self.pos_scoring[idx]
-            i, p = c.indices, c.data / c.data.sum()
-            hpos.append(choice(i, size=self.n_pos, p=p))
-        hpos = np.asarray(hpos)
-        return idx, list(map(lambda x: choice(self.gt_rows[x].indices), idx)), hpos
+        lbl, doc, hpos = super().sample(idx, size)
+        return doc, lbl, hpos
 
 
 class CrossAttention(DatasetBase):
@@ -236,7 +217,7 @@ class CrossAttention(DatasetBase):
         self.S.filter(valid_idx, axis=0)
 
     def setup(self):
-        self.order = np.arange(len(self)).reshape(-1, 1)
+        self.order = np.arange(len(self))
 
     @property
     def module2(self):
@@ -252,15 +233,14 @@ class CrossAttention(DatasetBase):
         pos = _gt.multiply(_sh)
         neg = _sh - pos
         _hard_neg = xs.retain_topk(neg, k=1)
-        _hard_neg.data[_hard_neg.data[:] < 0.99] = 0
         neg = neg - _hard_neg
         pos.eliminate_zeros()
         neg.eliminate_zeros()
         pos.data[:] = 1.01 - pos.data[:]
-        neg.data[:] = 1.01 + neg.data[:]
+        neg.data[:] = 1.01 #+ neg.data[:]
         p_rows, p_cols = pos.nonzero()
         _gt[p_rows, p_cols] = 0
-        pos = pos + _gt.multiply(0.1)
+        pos = pos #+ _gt.multiply(0.1)
         return pos.tolil(), neg.tolil(), self.gt[d_idx].tolil()
         
     def __getitem__(self, didx):
@@ -282,13 +262,10 @@ class CrossAttention(DatasetBase):
     def blocks(self, shuffle=False):
         # NOTE Assuming lbls are always sorted
         if shuffle:
-            idx = np.arange(len(self.order))
-            np.random.shuffle(idx)
-            docs = np.concatenate(list(map(lambda x: self.order[x], idx)
-                                       )).flatten()
-        else:
-            docs = np.concatenate(self.order)
-        return docs
+            np.random.shuffle(self.order)
+        if isinstance(self.order, list):
+            return np.concatenate(self.order).flatten()
+        return self.order
 
     @property
     def type_dict(self):
@@ -310,10 +287,11 @@ class CrossAttention(DatasetBase):
         else:
             raise NotImplementedError(f"{type(lbls)} not found")
     
-    def random_select(self, pos, neg):
+    def random_select(self, pos, neg, return_pos = False):
         num_docs = pos.shape[0]
         p_i, p_p = pos.rows, pos.data
         n_i, n_p = neg.rows, neg.data
+        pos_lbls = []
         index = np.zeros((num_docs, self.n + self.p))
         masks = np.zeros((num_docs, self.n + self.p))
         for idx, (_p_i, _p_p, _n_i, _n_p) in enumerate(zip(p_i, p_p, n_i, n_p)):
@@ -328,6 +306,7 @@ class CrossAttention(DatasetBase):
                 _p_p /= _p_p.sum()
                 _p_i = choice(_p_i, size=self.p)
                 items[-self.p:] = _p_i[:]
+                pos_lbls.extend(_p_i[:])
             
             masks[idx, :len(items)] = 1
             index[idx, :len(items)] = items[:]
@@ -335,6 +314,8 @@ class CrossAttention(DatasetBase):
         idx = np.arange(num_docs).reshape(-1, 1)
         index = torch.from_numpy(index).type(torch.LongTensor)
         masks = torch.from_numpy(masks).type(torch.FloatTensor)
+        if return_pos:
+            return index, masks, np.asarray(pos_lbls)
         return index, masks
 
     def split(self, d_idx, index, X, L):
@@ -358,7 +339,7 @@ class CrossAttention(DatasetBase):
 
     def collate_fn(self, _idx):
         d_batch = BatchData({})
-        pos, neg, Y = self.get_samples(_idx, self.module2, self.gt)
+        pos, neg, Y = self.get_samples(np.int32(_idx), self.module2, self.gt)
         d_batch["index"], d_batch["masks"] = self.random_select(pos, neg)
         _Y = np.take_along_axis(Y, d_batch["index"].numpy(), 1).todense()    
         d_batch["Y"] = torch.from_numpy(_Y).type(torch.FloatTensor)

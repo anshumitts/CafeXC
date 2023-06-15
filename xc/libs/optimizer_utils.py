@@ -24,7 +24,9 @@ class Optimizer(object):
     def _get_opt(self, optim, is_sparse, params):
         if optim == 'Adam':
             if is_sparse == "sparse":
-                return SparseAdam(params)
+                lr = params[0]["lr"]
+                params = [param["params"] for param in params]
+                return SparseAdam(params, lr=lr)
             return Adam(params)
         elif optim == 'AdamW':
             if is_sparse == "sparse":
@@ -95,7 +97,7 @@ class Optimizer(object):
 
                 if (np.intersect1d(p_name, self.special).size > 0
                         or isinstance(child, self.ignore)):
-                    _optim = "Adam"
+                    _optim = self.optim
 
                 if not (np.intersect1d(p_name, self.special).size > 0
                         or isinstance(child, self.ignore)):
@@ -106,7 +108,7 @@ class Optimizer(object):
                         _optim = "Adam"
                 args = {"params": para, "lr": _lr}
                 module_params[_optim][key].append(args)
-                print(_lr, _optim, para.shape, key)
+                print(_lr, _optim, para.shape, para.is_leaf, key)
         return module_params
 
     def adjust_lr(self):
