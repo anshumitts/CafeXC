@@ -216,7 +216,7 @@ class ModelViT(ImgEncoderBase):
 
     def encode(self, images):
         images = self.transform(images)
-        images = self.features(images)
+        images = self.features(images, interpolate_pos_encoding=True)
         images = images.pooler_output
         return images.unsqueeze(1)
 
