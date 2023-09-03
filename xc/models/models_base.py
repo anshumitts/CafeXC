@@ -50,13 +50,16 @@ class BottleNeck(nn.Module):
     def __init__(self, model_dim, compare_with_dim):
         super().__init__()
         self.features = nn.Sequential()
-        self.optim = "Adam"
         self.model_dim = model_dim
         if compare_with_dim != model_dim and compare_with_dim != -1:
-            if model_dim > compare_with_dim:
-                self.features = nn.AdaptiveMaxPool1d(compare_with_dim)
-            elif model_dim < compare_with_dim:
-                self.features = Projection(model_dim, compare_with_dim)
+            layers = []
+            while model_dim//2 > compare_with_dim:
+                layers.append(Projection(model_dim, model_dim//2,
+                                         spectral_norm=True))
+                model_dim = model_dim//2
+            layers.append(Projection(model_dim, compare_with_dim,
+                                     spectral_norm=True))
+            self.features = nn.Sequential(*layers)
             self.model_dim = compare_with_dim
 
     @property

@@ -111,7 +111,7 @@ def setup_tokenizer(txt_model):
     elif txt_model in ["bert-tiny", "bert-mini-mnli"]:
         _tokenizer = AutoTokenizer.from_pretrained(
             f"prajjwal1/{txt_model}", do_lower_case=True)
-    elif txt_model in ["sentencebert"]:
+    elif txt_model in ["sentencebert", "custom"]:
         _tokenizer = AutoTokenizer.from_pretrained(
             "sentence-transformers/msmarco-distilbert-cos-v5",
             do_lower_case=True)

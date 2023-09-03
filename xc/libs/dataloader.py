@@ -52,7 +52,7 @@ class XCDistributedDataLoader(object):
 
 def DataLoader(data, batch_size=256, drop_last=False, params=None,
                shuffle=False, num_workers=2, pin_memory=False,
-               collate_fn=None, prefetch_factor=2, num_process=1):
+               collate_fn=None, prefetch_factor=1, num_process=1):
     dl = XCDataLoader(data, batch_size=batch_size, num_workers=num_workers,
                       shuffle=False, pin_memory=pin_memory,
                       sampler=CustomSampler(data, shuffle),

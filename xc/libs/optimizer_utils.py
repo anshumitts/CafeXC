@@ -8,12 +8,13 @@ import numpy as np
 
 
 class Optimizer(object):
-    def __init__(self, special=["bias", "LayerNorm"],
-                 type_scheudle="linear", optim="Adam"):
+    def __init__(self, special=["bias", "LayerNorm"], type_scheudle="linear",
+                 optim="Adam", w_decay=0.01):
         self.optimizer = {}
         self.scheudler = {}
         self.optim = optim
-        print(f"Using {type_scheudle} scheudler")
+        self.w_decay = w_decay
+        print(f"Using {type_scheudle} scheudler, {w_decay} as weight decay")
         if type_scheudle == "linear":
             self.typ = get_linear_schedule_with_warmup
         elif type_scheudle == "cosine":
@@ -31,7 +32,7 @@ class Optimizer(object):
         elif optim == 'AdamW':
             if is_sparse == "sparse":
                 return SparseAdam(params)
-            return AdamW(params, weight_decay=0.01, eps=1e-6)
+            return AdamW(params, weight_decay=self.w_decay, eps=1e-8)
         raise NotImplementedError("Unknown optimizer!")
 
     def construct(self, model, lr=0.01, trn_dl=[], warmup_steps=1,

@@ -237,10 +237,10 @@ class CrossAttention(DatasetBase):
         pos.eliminate_zeros()
         neg.eliminate_zeros()
         pos.data[:] = 1.01 - pos.data[:]
-        neg.data[:] = 1.01 #+ neg.data[:]
-        p_rows, p_cols = pos.nonzero()
-        _gt[p_rows, p_cols] = 0
-        pos = pos #+ _gt.multiply(0.1)
+        neg.data[:] = 1.01 + neg.data[:]
+        # p_rows, p_cols = pos.nonzero()
+        # _gt[p_rows, p_cols] = 0
+        # pos = _gt
         return pos.tolil(), neg.tolil(), self.gt[d_idx].tolil()
         
     def __getitem__(self, didx):

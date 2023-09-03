@@ -20,7 +20,7 @@ def load_txt(root, n_file):
     elif n_file.endswith("txt"):
         return RAWDataset(root, n_file)
     elif n_file.endswith("seq.memmap") or n_file.endswith("seq.npy"):
-        return SEQDataset(root, n_file)
+        return SEQDataset(root, n_file, read_full)
     elif n_file.endswith("pretrained"):
         if os.environ['RESTRICTMEM'] == '1':
             return MEMTXTDataset(root, n_file, read_full)
@@ -122,7 +122,10 @@ class RAWDataset(TXTDataset):
         self.max_len = params.max_len
         self.tokenizer = setup_tokenizer(txt_model)
         file_name = f"{file_name}.{prefix}"
-        cached_path = os.path.join(data_dir, txt_model)
+        _txt_model = txt_model
+        if _txt_model in ["custom"]:
+            _txt_model = "sentencebert"
+        cached_path = os.path.join(data_dir, _txt_model)
         if len(glob.glob(f"{cached_path}/{file_name}*")) > 0:
             return load_txt(cached_path, file_name)
         self.data = fasterTxtRead(self.data)
@@ -139,9 +142,10 @@ class RAWDataset(TXTDataset):
 
 
 class SEQDataset(TXTDataset):
-    def __init__(self, root, n_file):
+    def __init__(self, root, n_file, read_full=False):
         self.data = load_file(os.path.join(root, f"{n_file}"))
-        # self.data = np.array(self.data[:])
+        if read_full:
+            self.data = np.array(self.data[0:None])
         self._type = "seq"
     
     @property

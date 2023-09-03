@@ -1,6 +1,7 @@
 # Example to evaluate
 import xclib.evaluation.xc_metrics as xc_metrics
 from xc.libs.utils import load_file
+import xclib.utils.sparse as xs
 import numpy as np
 import json
 import sys
@@ -49,10 +50,11 @@ def main(targets_label_file, train_label_file, result_dir, predictions_file, A, 
         m2_score_mat_dir = os.path.join(
             result_dir, f"module4/m2_{predictions_file}.npz")
         m2 = _remove_overlap(load_file(m2_score_mat_dir).tolil(), docs, lbls)
-
         m4_score_mat_dir = os.path.join(
             result_dir, f"module4/m4_{predictions_file}.npz")
         m4 = _remove_overlap(load_file(m4_score_mat_dir).tolil(), docs, lbls)
+        m2 = xs.retain_topk(m2, k=100)
+        m4 = xs.retain_topk(m4, k=100)
 
         for alpha in [0.1, 0.3, 0.5, 0.7, 0.9]:
             scr_mat = m4.copy().multiply(alpha)

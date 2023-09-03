@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from xc.libs.custom_dtypes import (padded_inputs, FeaturesAccumulator)
 from xc.models.models_fusion import Fusion
 from xc.libs.anns import ANNSBox
-from collections import OrderedDict
 
 
 class MufinModelBase(ModelBase):
@@ -24,7 +23,7 @@ class MufinModelBase(ModelBase):
         if "PreTrained" in self.params.model_fname:
             img_model = self.params.img_model
         if doc_txt is not None:
-            f_name = doc_txt.split("/")[-1].split(".")[0]
+            f_name = doc_txt.split("/")[-1].replace(".raw.txt", "")
         elif doc_img is not None:
             f_name = doc_img.split("/")[-1].split(".")[0]
         feat.build_pre_trained(txt_model, img_model, f_name, self.params)
@@ -32,12 +31,6 @@ class MufinModelBase(ModelBase):
 
     def load_ground_truth(self, data_dir, lbl_file, _type="lbl"):
         return FtsData(data_dir, lbl_file, _type=_type)
-
-    def load(self, model_dir, fname):
-        print("Loading model..")
-        self.filter.load(os.path.join(model_dir, f"filter_{fname}"))
-        data = torch.load(os.path.join(model_dir, fname))
-        self.net.load_state_dict(data)
 
     def extract_item(self, tst_dset, desc="docs", mode="test"):
         content = FeaturesAccumulator(f"{desc} content")
@@ -85,9 +78,14 @@ class MufinModelBase(ModelBase):
         return {"img": img_content, "txt": txt_content}
 
     def extract(self, data_dir, tst_img, tst_txt):
-        self.load(self.params.model_dir, "model.pkl")
         tst_dset = self.half_dataset(data_dir, tst_img, tst_txt)
+        self.load(self.params.model_dir, "model.pkl")
         return self.extract_modal(tst_dset)
+    
+    def extract_emb(self, data_dir, tst_img, tst_txt):
+        tst_dset = self.half_dataset(data_dir, tst_img, tst_txt)
+        self.load(self.params.model_dir, "model.pkl")
+        return {"txt": self.extract_item(tst_dset)}
 
 
 class Mufin(MufinModelBase):
@@ -95,7 +93,8 @@ class Mufin(MufinModelBase):
         super(Mufin, self).__init__(
             params, network, optimizer)
         self.anns = ANNSBox(num_labels=params.num_labels,
-                            top_k=params.top_k, M=params.M)
+                            top_k=params.top_k, M=params.M,
+                            method=params.method)
         self.mz = self.params.min_leaf_sz
 
     def adjust_leaf_sz(self, bs, ce, ne):
@@ -199,6 +198,8 @@ class Mufin(MufinModelBase):
             self.net.init_encoder(init)
         self.anns.use_hnsw = True
         L = self.half_dataset(data_dir, lbl_img, lbl_txt)
+        X = self.half_dataset(data_dir, trn_img, trn_txt)
+        
         print(data_dir, trn_lbl)
         Y = self.load_ground_truth(data_dir, trn_lbl)
 
@@ -209,11 +210,13 @@ class Mufin(MufinModelBase):
             ymat = Y.data.shape[1]
         self.filter.fit(docs, lbls, ymat)
         print("Extracting items")
-        data = self.extract_item(L, "lbls")
+        ldata = self.extract_item(L, "lbls")
+        data = ldata
         label_freq = np.ravel(ymat.getnnz(axis=0))
         repeat_labels = np.where(label_freq >= self.params.doc_thresh)[0]
         print("Repeat this many labels", repeat_labels.size)
-        self.anns.fit_anns(data.data, data.smat.T, repeat_labels, self.params.n_split)
+        self.anns.fit_anns(data.data, data.smat, repeat_labels, self.params.n_split,
+                           model_path=self.params.model_dir)
         self.save_anns(self.params.model_dir)
         self.save(self.params.model_dir, "model.pkl")
 
@@ -225,7 +228,7 @@ class Mufin(MufinModelBase):
         print(f"Warmimg up the model from {0} to {ws} epochs")
         for epoch in np.arange(0, ws):
             _ = self.step(trn_dl, epoch)
-            if (epoch) % 10 == 0 and tst_dset is not None:
+            if (epoch) % 5 == 0 and tst_dset is not None:
                 docs, lbls = self.get_embs(trn_dset, True)
                 self.callback(docs, lbls, trn_dset.Y.data, epoch)
                 if self.params.not_use_module2:
@@ -338,9 +341,14 @@ class MufinRanker(MufinModelBase):
         X = self.half_dataset(data_path, tst_img, tst_txt)
         L = self.half_dataset(data_path, lbl_img, lbl_txt)
         S = self.load_ground_truth(shorty_dir, "test.npz", "shorty")
+        S.keep_topk(self.params.top_k)
+        Y_trn = self.load_ground_truth(data_dir, tst_lbl)
+        
         tst_dset = RankerPredictDataset(X, L, S.data)
         self.load(self.params.model_dir, self.params.model_out_name)
-        return self._predict(tst_dset)
+        smat = self._predict(tst_dset)
+        self.evaluate(smat, Y_trn.data)
+        return smat
 
     def _predict(self, tst_dset, X=None, L=None):
         self.net.cpu()
@@ -415,7 +423,7 @@ class MufinRanker(MufinModelBase):
                     if os.environ['RESTRICTMEM'] == '0':
                         L = self.extract_item(
                             trn_dset.L, "lbls", mode="get_docs")
-                    score_mat = self._predict(tst_dset, L=L)
+                    score_mat = self._predict(tst_dset)
                     self.evaluate(score_mat, tst_dset.gt)
 
                 if self.params.boosting:
@@ -426,7 +434,6 @@ class MufinRanker(MufinModelBase):
                     _ = self.callback(trn_dl.dataset, L=L)
 
             self.save(self.params.model_dir, self.params.model_out_name)
-        self.save(self.params.model_dir, self.params.model_out_name)
         if (epoch) % 5 != 0 and self.params.validate:
             if os.environ['RESTRICTMEM'] == '0':
                 L = self.extract_item(trn_dset.L, "lbls", mode="get_docs")

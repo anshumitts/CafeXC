@@ -1,10 +1,16 @@
-from xclib.utils.shortlist import ShortlistCentroids as shorty
+from xclib.utils.shortlist import Shortlist as shorty
 # from xclib.utils.shortlist import ShortlistInstances as shorty
 from .utils import map_one, pbar
 from .cluster import cluster
 from .dataparallel import DataParallel
+try:
+    from .diskann import DiskANN
+except Exception as e:
+    print(f"{e}: DiskANN is not installed correctly")
 from xclib.utils import sparse as xs
 import torch.nn.functional as F
+from sklearn.preprocessing import normalize
+import scipy.sparse as sp
 import numba as nb
 import numpy as np
 import pickle
@@ -32,30 +38,23 @@ class OvAModule(torch.nn.Module):
             return None, None
         doc = F.normalize(doc)
         scr, ind = torch.topk(doc.mm(self.lbl_emb), dim=1,
-                              k=min(K, self.lbl_emb.size(1)))
+                              k=min(K, self.lbl_emb.shape[1]))
         if self.remapped is not None:
             ind = self.remapped[ind]
         return scr, ind
     
-    def extra_repr(self):
-        _str = ""
-        if self.lbl_emb is not None:
-            _str+= f"vect:{self.lbl_emb.shape}"
-        if self.remapped is not None:
-            _str+= f"remap:{self.remapped.size}"
-        return _str
+    def _extra_repr_(self):
+        return f"vect:{self.lbl_emb.shape}: remap:{self.remapped.size}"
 
 
-def get_sub_data(doc_vect, smat, label_idx):
+def get_sub_data(doc_vect, label_idx):
     if len(label_idx) == 0:
-        return None, None
+        return None
     
-    if label_idx.size == smat.shape[0]:
-        return doc_vect, smat
-    _smat = smat[:, label_idx]
-    valid_docs = np.ravel(_smat.getnnz(axis=1))
-    valid_docs = np.where(valid_docs > 0)[0]
-    return doc_vect[valid_docs], _smat[valid_docs]
+    if label_idx.size == doc_vect.shape[0]:
+        return doc_vect
+    
+    return doc_vect[label_idx]
 
 
 @nb.njit(nb.types.Tuple(
@@ -98,6 +97,14 @@ def query_anns(anns, ova_module, docs, num_lbls, top_k=100, lbl_hash=None, desc=
     return smat[:, :-1]
 
 
+def set_anns(method, M):
+    if method == "hnsw":
+        return shorty(method=method, num_neighbours=3*M, M=M, efS=3*M, efC=3*M)
+    if method == "diskann":
+        return DiskANN({"L": 3*M, "R": M, "C": 7*M, "alpha": 1.2,
+                        "saturate_graph": False, "num_threads": 128})
+
+
 class ANNSBox(object):
     def __init__(self, top_k: int = 100, num_labels: int = -1, M: int = 500,
                  use_hnsw: bool = False, method: str = "hnsw"):
@@ -111,7 +118,7 @@ class ANNSBox(object):
         self.method = method
         self.lbls_emb = None
 
-    def fit(self, docs_emb=None, lbls_emb=None, y_mat=None):
+    def fit(self, docs_emb=None, lbls_emb=None, y_mat=None, *args, **kwargs):
         if self.use_hnsw == False:
             self.lbls_emb = DataParallel(OvAModule(lbls_emb))
     
@@ -124,32 +131,77 @@ class ANNSBox(object):
             self.lbls_emb.cpu()
             self.lbls_emb.callback(clean=True)
 
-    def fit_anns(self, vect, smat, most_freq_items=[], num_splits=1):
-        if self.use_hnsw:
-            self.most_freq_items = most_freq_items
-            _vect, _smat = get_sub_data(vect, smat, most_freq_items)
-            
-            if _vect is not None:
-                _vect = _smat.dot(_vect)
+    def fit_anns(self, vect, smat=None, most_freq_items=[],
+                 num_splits=1, model_path="", *args, **kwargs):
+        if smat is not None:
+            vect = np.asarray(smat.dot(vect))
+        vect = normalize(vect)
+        self.most_freq_items = most_freq_items
+        lbl_idx = np.arange(vect.shape[0])
+
+        if len(most_freq_items) > 0:
+            _vect = get_sub_data(vect, most_freq_items)
             self.lbls_emb = OvAModule(_vect, most_freq_items)
             self.lbls_emb = DataParallel(self.lbls_emb)
-            print(self.lbls_emb)
-            n_lbls = smat.shape[1]
-            lbl_idx = np.arange(n_lbls)
             
-            id_lbl = np.setdiff1d(lbl_idx, most_freq_items)
-            id_lbl = np.array_split(id_lbl, num_splits)
-            self.num_splits = len(id_lbl)
-            for split in tqdm.tqdm(range(self.num_splits)):
-                self.hnsw[f"part_{split}"] = shorty(
-                    method=self.method, num_neighbours=3*self.M,
-                    M=self.M, efS=3*self.M, efC=3*self.M)
-                print(f"num_lbls = {id_lbl[split].size}")
-                _mapd = id_lbl[split]
-                _vect, _smat = get_sub_data(vect, smat, _mapd)
-                print(_vect.shape, _smat.shape)
-                self.hnsw[f"part_{split}"].fit(_vect, _smat)
-                self.mapd[f"part_{split}"] = _mapd
+        id_lbl = np.setdiff1d(lbl_idx, most_freq_items)
+        id_lbl = np.array_split(id_lbl, num_splits)
+        self.num_splits = len(id_lbl)
+
+        for split in tqdm.tqdm(range(self.num_splits)):
+            self.hnsw[f"part_{split}"] = set_anns(self.method, self.M)
+            _mapd = id_lbl[split]
+            _vect = get_sub_data(vect, _mapd)
+            path = os.path.join(model_path, f"part_{split}")
+            if self.method == "hnsw":
+                self.hnsw[f"part_{split}"].fit(_vect)
+            else:
+                self.hnsw[f"part_{split}"].fit(_vect, path,
+                                            *args, **kwargs)
+            self.mapd[f"part_{split}"] = _mapd
+    
+    def get_index(self, sparse=True):
+        keys = list(self.hnsw.keys())
+        mat = self.hnsw[keys[0]].get_index(sparse=sparse)[1]
+        rows, cols = mat.nonzero()
+        rows = [self.mapd[keys[0]][rows]]
+        cols = [self.mapd[keys[0]][cols]]
+        
+        for key in keys[1:]:
+            mat = self.hnsw[key].get_index(sparse=sparse)[1]
+            _rows, _cols = mat.nonzero()
+            rows.append(self.mapd[key][_rows])
+            cols.append(self.mapd[key][_cols])
+        
+        rows = np.concatenate(rows)
+        cols = np.concatenate(cols)
+        return sp.csr_matrix((np.ones(rows.size), (rows, cols)),
+                             shape=(self.num_labels, self.num_labels))
+    
+    def get_vect(self):
+        keys = list(self.hnsw.keys())
+        mat = self.hnsw[keys[0]].get_vect()
+        indexes = [self.mapd[keys[0]]]
+        mats = [mat]
+        for key in keys[1:]:
+            mat = self.hnsw[key].get_vect()
+            mats.append(mat)
+            indexes.append(self.mapd[key])
+        indexes = np.concatenate(indexes)
+        mats = np.vstack(mats)[np.argsort(indexes)]
+        return mats
+    
+    def partial_build(self, index, vect, model_path):
+        keys = list(self.hnsw.keys())
+        if len(keys) == 1:
+            path = os.path.join(model_path, keys[0])
+            self.hnsw[keys[0]].update(index, None, vect, path)
+            return
+        for key in keys:
+            path = os.path.join(model_path, key)
+            _vect = vect[self.mapd[key]]
+            _index = index[self.mapd[key]].tocsc()[:, self.mapd[key]]
+            self.hnsw[key].update(_index, None, _vect, path)
 
     def __call__(self, docs, batch_size=2048):
         return self.brute_query(docs)
@@ -179,8 +231,6 @@ class ANNSBox(object):
         if self.use_hnsw:
             for key in self.hnsw.keys():
                 path = os.path.join(model_dir, f"{key}")
-                os.makedirs(path, exist_ok=True)
-                path = os.path.join(path, f"anns_m1")
                 self.hnsw[key].save(path)
             path = os.path.join(model_dir, f"anns_m1_map.pkl")
             with open(path, "wb") as f:
@@ -194,22 +244,24 @@ class ANNSBox(object):
     def load(self, model_dir):
         if self.use_hnsw:
             path = os.path.join(model_dir, f"anns_m1_map.pkl")
-            with open(path, "rb") as f:
-                self.mapd = pickle.load(f)
-                self.most_freq_items = self.mapd["most_freq_items"]
-            self.num_splits = len(self.mapd.keys()) - 1
-            if len(self.most_freq_items) > 0:
-                path = os.path.join(model_dir, f"ova_module.pkl")
-                self.lbls_emb = torch.load(path)
-                print(self.lbls_emb)
-
-                
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    self.mapd = pickle.load(f)
+                    self.most_freq_items = self.mapd["most_freq_items"]
+                self.num_splits = len(self.mapd.keys()) - 1
+                if len(self.most_freq_items) > 0:
+                    path = os.path.join(model_dir, f"ova_module.pkl")
+                    self.lbls_emb = torch.load(path)
+            else:
+                print("anns_m1_map not found")
+                self.num_splits = 1
+                self.mapd["part_0"] = np.arange(self.num_labels)
             for split in range(self.num_splits):
                 key = f"part_{split}"
-                path = os.path.join(model_dir, f"{key}/anns_m1")
-                self.hnsw[key] = shorty(
-                    method=self.method, num_neighbours=3*self.M,
-                    M=self.M, efS=3*self.M, efC=3*self.M)
+                path = os.path.join(model_dir, f"{key}")
+                self.hnsw[key] = set_anns(self.method, self.M)
                 self.hnsw[key].load(path)
-                self.hnsw[key].index._set_query_time_params(efS=3*self.M)
-
+                if self.method == "hnsw":
+                    self.hnsw[key].index._set_query_time_params(efS=3*self.M)
+                if self.method == "diskann":
+                    self.hnsw[key]._set_query_time_params(self.M)

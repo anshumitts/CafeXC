@@ -9,7 +9,7 @@ import torch
 
 
 def trans(img_model):
-    if img_model in ['ViT', "BeiT"]:
+    if img_model in ['ViT', "ViTBig", "BeiT"]:
         preprocess = torch.nn.Sequential(
             transforms.Normalize(mean=[0.5, 0.5, 0.5],
                                  std=[0.5, 0.5, 0.5]))
@@ -35,7 +35,9 @@ def load_pre_trained(model):
     if model in ["Identity"]:
         return None
     elif model in ["ViT"]:
-        return ViTModel.from_pretrained("google/vit-base-patch32-224-in21k")
+        return ViTModel.from_pretrained("google/vit-base-patch16-224-in21k")
+    elif model in ["ViTBig"]:
+        return ViTModel.from_pretrained("google/vit-huge-patch14-224-in21k")
     elif model in ["BeiT"]:
         return BeitModel.from_pretrained("microsoft/beit-base-patch16-224-pt22k")
     elif model in ["Dino"]:
@@ -72,7 +74,7 @@ def Model(model_type, params):
         return ModelGoogleNet(model, transf, params)
     elif model_type == "inception_v3":
         return ModelInceptionNetV3(model, transf, params)
-    elif model_type in ["ViT"]:
+    elif model_type in ["ViT", "ViTBig"]:
         return ModelViT(model, transf, params)
     elif model_type in ["BeiT"]:
         return ModelBeiT(model, transf, params)
@@ -215,9 +217,10 @@ class ModelViT(ImgEncoderBase):
         super(ModelViT, self).__init__(model, transf, params.project_dim)
 
     def encode(self, images):
+        # print(images)
         images = self.transform(images)
         images = self.features(images, interpolate_pos_encoding=True)
-        images = images.pooler_output
+        images = images[0][:, 0]
         return images.unsqueeze(1)
 
     @property
@@ -257,7 +260,7 @@ class ModelCLIP(ImgEncoderBase):
 
     def encode(self, images):
         images = self.transform(images)
-        images = self.features(images)[1]
+        images = self.features(images, interpolate_pos_encoding=True)[1]
         images = self.project(images)
         return images.unsqueeze(1)
 

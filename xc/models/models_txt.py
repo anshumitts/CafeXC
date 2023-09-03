@@ -1,4 +1,4 @@
-from transformers import AutoModel, CLIPModel
+from transformers import AutoModel, CLIPModel, BertConfig, BertModel
 from .models_base import EncoderBase, Identity
 import xc.libs.utils as ut
 import torch
@@ -8,8 +8,11 @@ def Model(mode_type, params):
 
     if mode_type == "sentencebert":
         return SentenceBert(params)
+    
+    elif mode_type == "custom":
+        return CustomEmbedding(params)
 
-    if mode_type == "ClipViT":
+    elif mode_type == "ClipViT":
         return ClipViT(params)
 
     elif mode_type == "VisualBert":
@@ -121,3 +124,29 @@ class VisualBert(TxtEncoderBase):
     @property
     def fts(self):
         return 768
+
+
+class CustomEmbedding(TxtEncoderBase):
+    def __init__(self, params):
+        configuration = BertConfig(vocab_size=30522,
+                                   num_hidden_layers=3,
+                                   num_attention_heads=6,
+                                   hidden_size=384,
+                                   intermediate_size=384 * 4)
+        print(configuration)
+        features = BertModel(configuration)
+        super().__init__(features, params.project_dim)
+
+    @property
+    def fts(self):
+        return 384
+
+    def freeze_params(self, keep_last=-1):
+        if keep_last == -1:
+            return
+        super().freeze_params()
+        if keep_last is None:
+            return
+        for params in self.features.transformer.layer[-keep_last:].parameters():
+            params.requires_grad = True
+

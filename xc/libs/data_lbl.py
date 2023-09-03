@@ -53,7 +53,14 @@ class LBLDataset(torch.utils.data.Dataset):
             self.data = self.data[valid_pts]
     
     def compress(self, clusters):
+        if isinstance(clusters, (np.ndarray, list)):
+            num_items = self.data.shape[1]
+            ids = np.zeros(num_items)
+            ids[clusters] = 1
+            clusters = sp.diags(ids, shape=(num_items, num_items)).tocsr()
+        print(self.data.shape, clusters.shape)
         self.data = self.data.dot(clusters).tocsr()
+        self.data.eliminate_zeros()
         self.binarize()
     
     def binarize(self):

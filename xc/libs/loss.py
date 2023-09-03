@@ -233,10 +233,13 @@ class TripletMarginLossOHNM(_Loss):
             sim_n[loss == 0] = -50
             prob = torch.softmax(sim_n/self.tau, dim=1)
             loss = loss * prob
-        reduced_loss = self._reduce(loss)*self.k
+        reduced_loss = self._reduce(loss.sum(dim=1))
         if self.num_violators:
             nnz = torch.sum((loss > 0), axis=1).float().mean()
             return reduced_loss, nnz
         else:
             return reduced_loss
+    
+    def extra_repr(self):
+        return f"M={self.margin}, num_neg={self.k}, apply_softmax={self.apply_softmax}"   
 

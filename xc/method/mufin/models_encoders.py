@@ -61,9 +61,11 @@ class ModalEncoder(Base):
             self.txt_encoder = None
         if rm_img:
             self.img_encoder = None
+        
 
     def encoder_dim(self):
         return self.txt_encoder.compare_with_dim
+
 
 
 class MultiModalEncoder(ModalEncoder):
@@ -72,6 +74,11 @@ class MultiModalEncoder(ModalEncoder):
         _params = copy.deepcopy(params)
         _params.project_dim = self.txt_encoder.compare_with_dim
         self.merge_embds = EMBModel("DEFAULT", _params)
+    
+    def remove_encoders(self, rm_txt=True, rm_img=True):
+        super().remove_encoders(rm_txt, rm_img)
+        if self.txt_encoder is None or self.img_encoder is None:
+            self.merge_embds = None
 
     def forward(self, batch, pool=True, output_attn_wts=False):
         content = super().forward(batch)
@@ -88,7 +95,10 @@ class MultiModalEncoder(ModalEncoder):
             masks.append(content[key]["mask"])
         vects = torch.cat(vects, dim=1)
         masks = torch.cat(masks, dim=1)
-        
+        if self.merge_embds is None:
+            embs = ut.mean_pooling(vects, masks)
+            mask = torch.ones((embs.size(0), 1), device=embs.device)
+            return embs, mask
         vect, mask, attn = self.merge_embds(vects, masks, apply_pooling=pool,
                                             output_attn_wts=output_attn_wts)
         if output_attn_wts:
@@ -158,7 +168,8 @@ class MultiModalRanker(Base):
         return DataParallel(self)
 
     def _build_vects(self, data, output_attn_wts=False):
-        return self.attn_encoder(data, self.pool_docs, output_attn_wts)
+        vect, mask = self.attn_encoder(data, self.pool_docs, output_attn_wts)
+        return vect.unsqueeze(1), mask
 
     def _apply_cross(self, data, output_attn_wts=False):
         return_data = {}

@@ -25,15 +25,21 @@ class ParameterBase(object):
                                  type=int, help='Split labels in this many groups')
         self.parser.add_argument('--freeze_layer',  default=-1, action='store',
                                  type=int, help='Number of layers to fine-tune')
+        self.parser.add_argument('--sample_nodes',  default=-1, action='store',
+                                 type=float, help='Number of nodes to sample [0,1]')
         
-        
+        self.parser.add_argument('--method', default="hnsw", help='using this ANNS')
         self.parser.add_argument('--not_use_module2', action='store_true',
                                  help='If True, it will not perform M2')
         self.parser.add_argument('--graph_init', default=0.1, action='store',
                                  help='Mu for graph init')
-        
+        self.parser.add_argument('--weight_decay', default=0.01,
+                                 help='weight decay params for AdamW')
         self.parser.add_argument('--doc_first', action='store_true',
                                  help='If True, mini batch will be made on document side')
+        self.parser.add_argument('--train_anns', default=99, action='store',
+                                 help='Fine tune anns after this many epochs')
+        
         self.params = None
         self._construct()
 

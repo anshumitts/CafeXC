@@ -5,6 +5,7 @@ from torchvision.ops import boxes as box_ops
 from sklearn.preprocessing import normalize
 from xclib.data import data_utils as du
 import torch.nn.functional as F
+import multiprocessing as mp
 import scipy.sparse as sp
 from tqdm import tqdm
 import numpy as np
@@ -14,6 +15,58 @@ import torch
 import json
 import os
 import re
+
+
+def gpuOva(return_dict, rank, vect, clf, topk, devices, index, batch_size=1023):
+    clf = clf.to(devices).T
+    scrs, idxs = [], []
+
+    for start in pbar(np.arange(0, vect.shape[0], batch_size),
+                      position=devices):
+        end = min(start + batch_size, vect.shape[0])
+        _vect = vect[start:end].to(devices)
+        scr = torch.mm(_vect, clf)
+        scr, idx = torch.topk(scr, k=topk)
+        scrs.append(scr.cpu().numpy())
+        idxs.append(index[idx.cpu().numpy()])
+    scrs = np.vstack(scrs)
+    idxs = np.vstack(idxs)
+    return_dict[rank] = {"scr": scrs, "idx": idxs}
+
+
+def KshardedOva(vect, lbl_emb, topk=1, batch_size=1023, return_scores=False):
+    vect = torch.from_numpy(vect).type(torch.FloatTensor)
+    lbl_emb = torch.from_numpy(lbl_emb).type(torch.FloatTensor)
+    processes = []
+    ctx = mp.get_context('spawn')
+    manager = ctx.Manager()
+    return_dict = manager.dict()
+    devices = np.arange(len(os.getenv("CUDA_VISIBLE_DEVICES").split(',')))
+    ids = np.array_split(np.arange(lbl_emb.shape[0]), len(devices))
+    gpu_lbl_clf = [lbl_emb[ids[i]].to(i) for i in range(len(devices))]
+        
+    for i in range(0, len(devices)):
+        p = ctx.Process(target=gpuOva,
+                        args=(return_dict, i, vect, gpu_lbl_clf[i], topk,
+                              devices[i], ids[i], batch_size))
+        p.start()
+        processes.append(p)
+        for p in processes:
+            p.join()
+    
+    scrs, idxs = [], []
+    for j in return_dict.keys():
+        scrs.append(return_dict[j]["scr"])
+        idxs.append(return_dict[j]["idx"])
+    scrs = np.hstack(scrs)
+    idxs = np.int32(np.hstack(idxs))
+    _idx = np.argsort(scrs, axis=1)[:,-topk:]
+    del gpu_lbl_clf
+    idxs = np.take_along_axis(idxs, _idx, axis=1)
+    if return_scores:
+        scrs = np.take_along_axis(scrs, _idx, axis=1)
+        return idxs, scrs
+    return idxs
 
 
 def xc_set_ddp(net, optimizer, num_process):
@@ -51,7 +104,7 @@ def fasterTxtRead(file, encoding="latin1", dlim="->"):
     return data
 
 
-@nb.jit(nb.types.Tuple(
+@nb.njit(nb.types.Tuple(
     (nb.int64[:], nb.float32[:]))(nb.int64[:], nb.float32[:], nb.int64))
 def map_one(indices_labels, similarity, pad_ind):
     unique_point_labels = np.unique(indices_labels)
@@ -228,12 +281,11 @@ class pbar(tqdm):
                     self.write(self.__str__())
 
 
-def mean_pooling(token_embeddings, attention_mask):  # BxSqxTxD, Bx1xT
+def mean_pooling(token_embeddings, attention_mask):  # BxSqxD, Bxsq
     # type: (Tensor, Tensor)->Tensor
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(
-        token_embeddings.size()).float()  # BxSqxTxD
-    doc_vects = torch.sum(token_embeddings * input_mask_expanded, -2)  # BxSqxD
-    return doc_vects / torch.clamp(input_mask_expanded.sum(-2), min=1e-5)
+    input_mask_expanded = attention_mask.unsqueeze(2)  # BxSqx1
+    doc_vects = torch.sum(token_embeddings * input_mask_expanded, dim=1)  # BxD
+    return doc_vects / input_mask_expanded.sum(dim=1)
 
 
 # @torch.jit.script

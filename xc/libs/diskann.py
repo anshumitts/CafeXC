@@ -1,20 +1,26 @@
 import numpy as np
-import vamanapy as vp
+import diskannpy as diks
 import scipy.sparse as sp
 import json
 import os
 import time
-import tempfile
+from xc.libs.utils import KshardedOva
+from sklearn.preprocessing import normalize
+from sklearn_extra.cluster import KMedoids
+import shutil
 
 
 # +
-def LoL2Sparse(list_of_list, num_cols, padd=True):
+def LoL2Sparse(list_of_list, num_cols, padd=True, data=None):
     num_rows = len(list_of_list)
     rows = np.concatenate(list(map(lambda x: [x[0]]*len(x[1]),
                                enumerate(list_of_list))))
     cols = np.concatenate(list_of_list)
-    sparse_mat = sp.lil_matrix((num_rows+padd, num_cols+padd), dtype=np.int32)
-    sparse_mat[rows, cols] = np.arange(rows.size) + 1
+    sparse_mat = sp.lil_matrix((num_rows+padd, num_cols+padd), dtype=np.float32)
+    if data is None:
+        data = np.ones(rows.size, dtype=np.float32)
+    data = np.ravel(data)
+    sparse_mat[rows, cols] = data
     return sparse_mat.tocsr()
 
 
@@ -23,9 +29,12 @@ class DiskANN:
                                    "C": 750, "alpha": 1.2,
                                    "saturate_graph": False,
                                    "num_threads": 128},
+                 metric="l2", dtype=np.single, num_threads=32,
                  model_path="./"):
-        vp.set_num_threads(anns_args["num_threads"])
         self.model_path = model_path
+        self.metric = metric
+        self.dtype = dtype
+        self.num_threads = num_threads
         self.args = {"ANNS": anns_args}
         self.args["META"] = {}
         self.set_params(self.args["ANNS"])
@@ -33,9 +42,9 @@ class DiskANN:
         self.index = None
     
     def set_params(self, args):
-        self.params = vp.Parameters()
+        self.params = {}
         for key in args.keys():
-            self.params.set(key, args[key])
+            self.params[key] = args[key]
     
     def optimize(self):
         pass
@@ -47,32 +56,60 @@ class DiskANN:
             f.write(vect.shape[1].to_bytes(4, "little"))
             f.write(vect.astype(np.float32).tobytes())
         return path
+    
+    def get_vect(self):
+        path = os.path.join(self.model_path, "index.bin.data")
+        with open(path, 'rb') as f:
+            N = int.from_bytes(f.read(4), "little")
+            D = int.from_bytes(f.read(4), "little")
+            data = np.fromfile(f, dtype="float32")
+        return data.reshape(N, D)
         
     def fit(self, vects, model_path=None):
         if model_path is None:
             model_path = self.model_path
-        temp_dir = tempfile.TemporaryDirectory()
         self.model_path = model_path
-        path = self.to_bin(vects, temp_dir.name)
-        self.vects = vects
+        if os.path.exists(model_path):
+            shutil.rmtree(model_path)
+        os.makedirs(self.model_path)
+        self.vects = normalize(np.float32(vects))
         start = time.time()
-        self.index = vp.SinglePrecisionIndex(vp.Metric.INNER_PRODUCT, path)
-        self.index.build(self.params, [])
+        if os.path.exists(os.path.join(model_path, "vectors.bin")):
+            print("Removing old vectors.bin")
+            os.remove(os.path.join(model_path, "vectors.bin"))
+        
+        diks.build_memory_index(
+            data=self.vects,
+            distance_metric="l2",
+            vector_dtype=np.single,
+            index_directory=model_path,
+            complexity=self.params["L"],
+            graph_degree=self.params["R"],
+            num_threads=self.num_threads,
+            index_prefix="index.bin",
+            alpha=1.2,
+            use_pq_build=False,
+            num_pq_bytes=8,
+            use_opq=False,
+        )
+        self.index = diks.StaticMemoryIndex(
+            distance_metric="l2",
+            vector_dtype=np.single,
+            index_directory=model_path,
+            num_threads=self.num_threads,  # this can be different at search time if you would like
+            initial_search_complexity=self.params["L"],
+            index_prefix="index.bin"
+        )
         end = time.time()
-        num_nodes, num_edges = self.index.get_stats()
         self.args["META"]["num_nodes"] = vects.shape[0]
-        print(f"build_time {end-start} num_nodes={num_nodes} num_edges={num_edges}")
-        temp_dir.cleanup()
+        print(f"build_time {end-start}")
     
     def save(self, out_path=None):
         if out_path is None:
-            out_path = self.model_path
-        
+            out_path = self.model_path        
         self.model_path = out_path
         os.makedirs(out_path, exist_ok=True)
-        _ = self.to_bin(self.vects, out_path)
-        path = os.path.join(out_path, "index.bin")
-        self.index.save(path)
+        print("Model is already saved")
         path = os.path.join(out_path, "args.json")
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(self.args, f, ensure_ascii=False, indent=4)
@@ -80,10 +117,15 @@ class DiskANN:
     def load(self, in_path):
         if in_path is None:
             in_path = self.model_path
-        path = os.path.join(in_path, "vect.bin")
-        self.index = vp.SinglePrecisionIndex(vp.Metric.INNER_PRODUCT, path)
-        path = os.path.join(in_path, "index.bin")
-        self.index.load(file_name = path)
+        self.model_path = in_path
+        self.index = diks.StaticMemoryIndex(
+            distance_metric="l2",
+            vector_dtype=np.single,
+            index_directory=in_path,
+            num_threads=self.num_threads,  # this can be different at search time if you would like
+            initial_search_complexity=self.params["L"],
+            index_prefix="index.bin"
+        )
         
         path = os.path.join(in_path, "args.json")
         with open(path, 'r', encoding='utf-8') as f:
@@ -91,43 +133,68 @@ class DiskANN:
         self.set_params(self.args["ANNS"])
    
     
-    def get_index(self, offset=4, sparse=False):
-        path = os.path.join(self.model_path, "index.bin")
+    def get_index(self, offset=6, sparse=False, prefix="index.bin"):
+        path = os.path.join(self.model_path, f"{prefix}")
         data = np.fromfile(path, dtype='uint32')   #1, 2, 2, 1, 2, 3, 1, 2, 3
+        num_nodes = 0
         _index = []
         _meta = data[:offset]
         while(offset < data.shape[0]):
+            num_nodes += 1
             start = offset + 1
             end = start + data[offset]
             _index.append(data[start:end])
             offset = end  
         del data 
-        
         if sparse:
             _index = LoL2Sparse(_index, self.args["META"]["num_nodes"], False)
+        self._meta = _meta
         return _meta, _index
     
-    def set_index(self, LoL, _meta, outfile = None):
-        if sp.issparse(LoL):
-            LoL = LoL.tolil().rows
+    def update(self, LoL, _meta=None, vect=None, outfile = None):
         
+        if _meta is None:
+            print("Using preset meta")
+            _meta = self._meta
         if outfile is not None:
+            if os.path.exists(outfile):
+                shutil.rmtree(outfile)
+            os.makedirs(outfile, exist_ok=True)
             self.model_path = outfile
-            self.save(self.model_path)
-
-        path = os.path.join(self.model_path, "index.bin")
+            if vect is None:
+                vect = self.vects
+            else:
+                print("Normalizing the vectors")
+                vect = normalize(vect)
         
+        if vect is None:
+            vect = os.path.join(self.model_path, "index.bin.data")
+        
+        path = os.path.join(self.model_path, "index.bin")
+        kmedoids = KMedoids(n_clusters=1, random_state=22).fit(vect)
+        _meta[3] = kmedoids.medoid_indices_[0]
+        print("New metadata", _meta)
+        
+        if sp.issparse(LoL):
+            LoL = LoL.tolil()
+            LoL[_meta[3], :] = 1
+            LoL = LoL.rows
         new_idx = []
         for u in range(len(LoL)):
             new_idx.extend([len(LoL[u])] + LoL[u])
         
-        file_size = len(new_idx) * 4 + 16
+        file_size = len(new_idx) * 4 + 24
         x = np.array(new_idx).astype(np.uint32)
         with open(path, 'wb') as f:
             f.write(file_size.to_bytes(8, "little"))
-            f.write(_meta[2:4].tobytes())
-            f.write(x.tobytes()) 
+            f.write(_meta[2:].tobytes())
+            f.write(x.tobytes())
         
+        diks.update_memory_index(path, "l2", self.model_path,
+                                 self.params["R"], self.params["R"],
+                                 self.num_threads, 1.2,
+                                 np.single, "index.bin", vect)
+        self.save(self.model_path)
         self.load(self.model_path)
         return True
     
@@ -144,14 +211,12 @@ class DiskANN:
         self.args["ANNS"] = anns_args
 
     def query(self, q_data, R=None, L=None):
-        num_q = q_data.shape[0]
+        q_data = normalize(q_data)
         if L is None:
             L = self.args["ANNS"]["L"]
         
         if R is None:
             R = self.args["ANNS"]["R"]
-        idx, scr, _, _ = self.index.batch_numpy_query(q_data, R, num_q, L)
-        idx = idx.reshape(num_q, R)
-        scr = scr.reshape(num_q, R)
-        return idx, scr
+        idx, scr, = self.index.batch_search(q_data, R, L, self.num_threads)
+        return idx, -scr # converting distance to similarity
 

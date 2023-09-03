@@ -1,5 +1,6 @@
 # Example to evaluate
 import xclib.evaluation.xc_metrics as xc_metrics
+import xclib.utils.sparse as xs
 from xc.libs.utils import load_file
 import scipy.sparse as sp
 import numpy as np
@@ -53,6 +54,9 @@ def main(targets_label_file, train_label_file, result_dir, predictions_file,
         m4_score_mat_dir = os.path.join(
             result_dir, f"module4/m4_{predictions_file}.npz")
         m4 = _remove_overlap(load_file(m4_score_mat_dir).tolil(), docs, lbls)
+        m2 = xs.retain_topk(m2, k=100)
+        m4 = xs.retain_topk(m4, k=100)
+
 
         scr_mat = m4.copy().multiply(alpha)
         scr_mat = scr_mat + m2.copy().multiply(1-alpha)

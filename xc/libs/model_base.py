@@ -1,7 +1,10 @@
 from xclib.evaluation.xc_metrics import precision, ndcg, format, recall, compute_inv_propesity, psprecision
 from .utils import pbar, aggregate, xc_set_ddp, xc_unset_ddp
+from xc.libs.custom_dtypes import MultiViewData, BatchData
 from xc.libs.dataloader import DataLoader as dl
-from .model_utils import FilterShortlist
+from xc.libs.model_utils import FilterShortlist
+from xc.libs.dataparallel import DataParallel
+from torch.nn.functional import normalize
 import scipy.sparse as sp
 import numpy as np
 import torch
@@ -161,3 +164,57 @@ class ModelBase:
     def extract_encoder(self):
         self.load(self.params.model_dir, self.params.model_out_name)
         return self.net.save_encoder()
+    
+    def convert2onnx(self, model_dir, fname, out_fname, device="cuda:0", test=False):
+        self.load(model_dir, fname)
+        import onnxruntime
+        from onnxruntime.quantization import quantize_dynamic, QuantType
+
+        class OnlyEncode(torch.nn.Module):
+            def __init__(self, net):
+                super(OnlyEncode, self).__init__()
+                self.net = net.item_encoder
+                if isinstance(self.net, DataParallel):
+                    self.net = self.net.module
+                    
+            def forward(self, txt_input_ids, txt_attention_mask):
+                txt_data = MultiViewData(
+                    BatchData({"mask": txt_attention_mask,
+                               "index": txt_input_ids}))
+                return normalize(self.net({"txt": txt_data, "img": None},
+                                          True, False)[0])
+
+        omodel = OnlyEncode(self.net)
+        omodel.to(device)
+        omodel.eval()
+        dummy_input = torch.randint(0, 10, (2, self.params.max_len)).to(device)
+        dummy_masks = torch.ones_like(dummy_input).to(device)
+        torch.onnx.export(
+            omodel, (dummy_input, dummy_masks),
+            f"{model_dir}/{out_fname}", export_params=True, opset_version=11,
+            input_names = ['txt_input_ids', 'txt_attention_mask'],
+            output_names = ['embeddings'],
+            dynamic_axes={'txt_input_ids' : {0:'batch_size', 1:'max_length'},
+                          'txt_attention_mask' : {0:'batch_size', 1:'max_length'},}
+        )
+
+        dummy_input = torch.randint(0, 10, (2, self.params.max_len)).to(device)
+        dummy_masks = torch.ones_like(dummy_input).to(device)
+        with torch.no_grad():
+            print(omodel(dummy_input, dummy_masks).cpu().numpy())
+        
+        def run_onnx(path):
+            ort_session = onnxruntime.InferenceSession(
+                path, sess_options=onnxruntime.SessionOptions(),
+                providers=['CPUExecutionProvider'])
+                # providers=[('CUDAExecutionProvider', {"device_id": 0})])
+            ort_inputs = {ort_session.get_inputs()[0].name: dummy_input.cpu().numpy(), 
+                        ort_session.get_inputs()[1].name: dummy_masks.cpu().numpy()}
+            ort_outs = ort_session.run(None, ort_inputs)
+            print(ort_outs[0])
+        
+        quantize_dynamic(f"{model_dir}/{out_fname}", f"{model_dir}/model.quant.onnx",
+                         weight_type=QuantType.QInt8)
+        
+        run_onnx(f"{model_dir}/{out_fname}")
+        run_onnx(f"{model_dir}/model.quant.onnx")

@@ -12,7 +12,6 @@ class MergeInstances(nn.Module):
     def __init__(self, params):
         super(MergeInstances, self).__init__()
         self.setup(params)
-        self.optim = "Adam"
 
     def setup(self, params):
         self.features = RTEncoder(params.project_dim, params.head_dims,

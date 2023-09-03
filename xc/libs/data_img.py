@@ -13,10 +13,11 @@ from torchvision.transforms.functional import to_tensor
 from concurrent.futures import ThreadPoolExecutor as tpe
 from xc.models.models_img import Model
 from xc.libs.dataparallel import DataParallel
-from xc.libs.custom_dtypes import FeaturesAccumulator
+from xc.libs.custom_dtypes import save
 from .utils import load_file
 from .data_base import NullDataset
 from .custom_dtypes import MultiViewData
+import tempfile
 
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -68,7 +69,7 @@ def load_img(root, n_file, max_worker_thread=10,
                                  img_db="images/img.bin")
         raise NotImplementedError
     except FileNotFoundError as e:
-        print(f"{root}/{n_file} not found!!")
+        print(f"{e} {root}/{n_file} not found!!")
         return NullDataset()
 
 
@@ -78,6 +79,7 @@ class IMGDatasetBase(NullDataset):
         self.random_k = random_k
         index = os.path.join(root, index) + ".npz"
         self.data = self.load_hash_map(index)
+        print(self.data.nnz)
         self._desc = "default"
 
     def load_hash_map(self, path):
@@ -166,14 +168,10 @@ class IMGBINDataset(IMGDatasetBase):
         data = flags.data[:] - 1  # NOTE: Handling offset
         if len(data) > 0:
             imgs = self._load_imgs(data, _desc=self._desc)
-        else:
-            len_idx = 1
-            if hasattr(idx, "__len__"):
-                len_idx = len(idx)
-            flags = sp.eye(len_idx).tocsr()
-            imgs = torch.zeros((len_idx, 3, self.size[0], self.size[1]))
-        flags.data[:] = 1
-        return MultiViewData(flags, imgs)
+            flags.data[:] = 1
+            return MultiViewData(flags, imgs)
+        else:            
+            return None
 
     def build_pre_trained(self, img_model, data_dir, file_name,
                           params, prefix="img.vect"):
@@ -189,28 +187,50 @@ class IMGBINDataset(IMGDatasetBase):
             imgs = torch.cat(list(map(lambda x: x.get_raw_vect(),
                                       batch)), dim=0)
             return imgs
+        
         params.project_dim = -1
         pre_trained = Model(img_model, params)
-        pre_trained.project = torch.nn.Identity()
-        pre_trained = DataParallel(pre_trained)
+        pre_trained.features.pooler = None
+        # pre_trained.features.layernorm = torch.nn.Sequential()
+
         dl = torch.utils.data.DataLoader(
-            self, batch_size=512, collate_fn=collate_fn,
+            self, batch_size=2, collate_fn=collate_fn,
             shuffle=False, num_workers=6, prefetch_factor=2)
-        features = FeaturesAccumulator("Image features", "memmap", f"")
-        with torch.no_grad():
+        os.makedirs(cached_path, exist_ok=True)
+        
+        fname = f"{cached_path}/{file_name}"
+        vect = np.memmap(fname + ".memmap.dat", mode="w+", dtype='float32',
+                         shape=(self.data.nnz, pre_trained.fts))
+        
+        with open(fname+".memmap.meta", "w") as f:
+            line = f"{vect.dtype.name},{self.data.nnz},{pre_trained.fts}\n"
+            f.write(f"{line}\n")
+        
+        nnz = 0
+        print(pre_trained)
+        pre_trained = DataParallel(pre_trained)
+        with torch.no_grad(), torch.cuda.amp.autocast():
             pre_trained = pre_trained.cuda()
             pre_trained = pre_trained.eval()
-            with torch.cuda.amp.autocast():
-                for data in tqdm.tqdm(dl):
-                    embs, mask = pre_trained(data)
-                    features.transform(embs, mask)
-        features.compile()
-        print(f"total number of images in datasets are {self.data.nnz}")
-        os.makedirs(cached_path, exist_ok=True)
-        features.remap(self.data)
-        features.save(os.path.join(cached_path, f"{file_name}"))
+            for data in tqdm.tqdm(dl):
+                embs, mask = pre_trained(data)
+                embs = embs.squeeze(1).cpu().numpy()
+                _nnz = nnz + embs.shape[0]
+                vect[nnz: _nnz, :] = np.float32(embs[:, :])
+                nnz = _nnz
+                if nnz % 1e6 == 0:
+                    vect.flush()
+                del embs, mask
+        print(f"total number of images {nnz} in datasets are {self.data.nnz}")
+        vect.flush()
+        _data = self.data.copy().tocsc()
+        _img_indx = np.ravel(_data.getnnz(axis=0))
+        valid_colums = np.where(_img_indx > 0)[0]
+        _data = _data[:, valid_colums].tocsr()
+        _data.data[:] = 1
+        sp.save_npz(fname+".npz", _data)
         pre_trained.cpu()
-        del features, pre_trained
+        del pre_trained
         return load_img(cached_path, f"{file_name}",
                         self.max_thread, self.random_k)
 
@@ -249,18 +269,26 @@ class MEMIMGDataset(IMGDatasetBase):
             self.vect = np.array(self.vect[:])
 
     def __getitem__(self, idx):
-        idx = np.int32(idx)
-        if not isinstance(idx, int):
-            sorted_idx = np.int32(np.argsort(idx))
-            idx = idx[sorted_idx]
-
         flags = self.data[idx]
         ind = flags.indices
         ind = np.unique(ind)
-        min_ind, max_ind = min(ind), max(ind) + 1
-        flags = flags.tocsc()[:, ind]
-        imgs = self.vect[min_ind:max_ind][ind-min_ind]
-        if not isinstance(idx, int):
-            flags = flags.tolil()
-            flags[sorted_idx] = flags.copy()
-        return MultiViewData(flags.tocsr(), imgs)
+        flags = flags.tocsc()[:, ind].tocsr()
+        imgs = self.vect[ind]
+        return MultiViewData(flags, imgs)
+    
+    # def __getitem__(self, idx):
+    #     idx = np.int32(idx)
+    #     if not isinstance(idx, int):
+    #         sorted_idx = np.int32(np.argsort(idx))
+    #         idx = idx[sorted_idx]
+
+    #     flags = self.data[idx]
+    #     ind = flags.indices
+    #     ind = np.unique(ind)
+    #     min_ind, max_ind = min(ind), max(ind) + 1
+    #     flags = flags.tocsc()[:, ind]
+    #     imgs = self.vect[min_ind:max_ind][ind-min_ind]
+    #     if not isinstance(idx, int):
+    #         flags = flags.tolil()
+    #         flags[sorted_idx] = flags.copy()
+    #     return MultiViewData(flags.tocsr(), imgs)

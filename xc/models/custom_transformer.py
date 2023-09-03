@@ -9,10 +9,10 @@ def elu_feature_map(mat):
 
 
 class Residual(nn.Module):
-    def __init__(self, input_dims, dropout=0.5):
+    def __init__(self, input_dims, dropout=0.1):
         super(Residual, self).__init__()
         drop = nn.Dropout(p=dropout)
-        activation = nn.GELU()
+        activation = nn.ReLU()
         trans = Projection(input_dims, input_dims)
         self.transform = nn.Sequential(trans, drop, activation)
 
@@ -21,7 +21,8 @@ class Residual(nn.Module):
         return self.transform(embs) + embs
 
 
-def Projection(num_embeddings, embedding_dim, residual=False):
+def Projection(num_embeddings, embedding_dim,
+               residual=False, spectral_norm=True):
     if residual:
         return Residual(num_embeddings)
 
@@ -31,7 +32,8 @@ def Projection(num_embeddings, embedding_dim, residual=False):
     else:
         torch.nn.init.kaiming_uniform_(linear.weight)
     linear.bias.data.fill_(0)
-    linear = nn.utils.spectral_norm(linear)
+    if spectral_norm:
+        linear = nn.utils.spectral_norm(linear)
     return linear
 
 
@@ -43,11 +45,16 @@ class QuadraticAttention(nn.Module):
 
     def forward(self, q, k, v, mask):
         E = q.size(-1)
-        scr = torch.einsum("nlhe,nshe->nhls", q/np.sqrt(E), k)  # BxhxT2xT1
+        q_hat = q/np.sqrt(E) #NLHE
+        q_hat = q_hat.permute(0, 2, 1, 3) #nhle
+        k = k.permute(0, 2, 3, 1) #nhes
+
+        scr = torch.matmul(q_hat, k)  # nxhxlxs
         scr.masked_fill_(mask == 0, -float("inf"))
         scr = self.activation(scr)
-        scr = self.drop(scr)  # BxhxT2xT1
-        return torch.einsum("nhls,nshe->nlhe", scr, v).contiguous(), scr
+        scr = self.drop(scr)  # nxhxlxs
+        v = v.permute(0, 2, 1, 3) #nhse
+        return torch.matmul(scr, v).contiguous(), scr
 
 
 class MultiHeadAtttention(nn.Module):

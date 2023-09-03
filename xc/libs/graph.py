@@ -182,9 +182,7 @@ class PrunedWalk(graph.RandomWalk):
         n_itm = self.Y.shape[1]
         mats = []
         pruned_edges = 0
-        for p_idx, idx in enumerate(np.arange(0, n_itm, b_size)):
-            if p_idx % 50 == 0:
-                print("INFO:WALK: completed [ %d/%d ]" % (idx, n_itm))
+        for idx in pbar(np.arange(0, n_itm, b_size)):
             start, end = idx, min(idx+b_size, n_itm)
             cols, data = _random_walk(q_rng, q_lbl, l_rng, l_qry, walk_to,
                                       p_reset, hops_per_step, start=start, end=end)
@@ -195,6 +193,7 @@ class PrunedWalk(graph.RandomWalk):
             mat.sum_duplicates()
             mat = mat.tocsr()
             mat.sort_indices()
+            
             if self.yf is not None:
                 _rows, _cols = mat.nonzero()
                 _lbf = self.yf[start+_rows]
@@ -202,14 +201,12 @@ class PrunedWalk(graph.RandomWalk):
                 mat.data[_dist > max_dist] = 0
                 pruned_edges += np.sum(_dist > max_dist)
                 mat.eliminate_zeros()
+            
+            if k is not None:
+                mat = xs.retain_topk(mat, k=k).tocsr()
             mats.append(mat)
             del rows, cols
-        print("INFO:WALK: completed [ %d/%d ]" % (n_itm, n_itm))
-        mats = sp.vstack(mats, "csr")
-        mats = normalize_graph(mats)
-        if k is not None:
-            mats = xs.retain_topk(mats, k=k).tocsr()
-        return mats
+        return sp.vstack(mats, "csr")
 
 
 def print_stats(mat, k=10):
