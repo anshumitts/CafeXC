@@ -169,7 +169,7 @@ class MultiModalRanker(Base):
 
     def _build_vects(self, data, output_attn_wts=False):
         vect, mask = self.attn_encoder(data, self.pool_docs, output_attn_wts)
-        return vect.unsqueeze(1), mask
+        return vect, mask
 
     def _apply_cross(self, data, output_attn_wts=False):
         return_data = {}

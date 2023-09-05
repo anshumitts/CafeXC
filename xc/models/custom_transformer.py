@@ -164,7 +164,9 @@ class RTDecoder(ReverseTransformer):
             contexts, attn_wts = module(contexts, sequenence, sequenence_mask)
         contexts = contexts.view(bs, Sk, q_sq, D)
         if apply_pooling:
-            contexts = mean_pooling(contexts, context_mask.unsqueeze(1))
+            context_mask = context_mask.view(bs, 1, q_sq, 1)
+            contexts = torch.sum(contexts*context_mask, dim=2)
+            contexts = contexts/torch.sum(context_mask, dim=2)
             context_mask = torch.ones((bs, Sk, 1), device=contexts.device)
 
         if not output_attn_wts:
